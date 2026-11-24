@@ -451,6 +451,43 @@ class TripPlanTests(unittest.TestCase):
         self.assertAlmostEqual(restored.status()['dwell_remaining_s'], 1200 - 12, delta=1.5)
         restored.close()
 
+    def test_preview_reuses_unchanged_legs_and_skips_signs(self) -> None:
+        body = self._body()
+        body['start'] = False
+        first = self.trip.preview_body(body)
+        self.assertEqual(first['stop_count'], 4)
+        self.assertTrue(all(call[0] is False for call in self.drive_calls))
+        for stop, raw in zip(first['stops'], body['stops']):
+            raw['id'] = stop['id']
+        drives = len(self.drive_calls)
+        walks = len(self.walk_calls)
+        self.trip.preview_body(body)
+        self.assertEqual(len(self.drive_calls), drives)
+        self.assertEqual(len(self.walk_calls), walks)
+        self.assertGreater(self.trip._cache_hits, 0)
+        body['stops'][0]['dwell_minutes'] = 25
+        self.trip.preview_body(body)
+        self.assertEqual(len(self.drive_calls), drives)
+        self.assertEqual(self.trip.stops[0].dwell_minutes, 25)
+        body['stops'][1]['mode'] = 'drive'
+        body['stops'][1]['go_inside'] = False
+        self.trip.preview_body(body)
+        self.assertGreater(len(self.drive_calls), drives)
+        self.assertEqual(self.trip.stops[0].id, first['stops'][0]['id'])
+
+    def test_edit_rejects_a_finished_stop_and_keeps_its_id(self) -> None:
+        status = self.trip.plan_body(self._body(start=True))
+        self.trip.index = 1
+        self.trip.stops[0].arrived_at = '2026-01-01T00:00:00+00:00'
+        self.trip.stops[0].departed_at = self.trip.stops[0].arrived_at
+        with self.assertRaises(Exception) as raised:
+            self.trip.update_stop('1', {'dwell_minutes': 5})
+        self.assertIn('finished', str(raised.exception).lower())
+        edited = self.trip.update_stop(status['stops'][1]['id'], {'label': 'Across the lot', 'dwell_minutes': 8})
+        self.assertEqual(edited['stops'][1]['label'], 'Across the lot')
+        self.assertEqual(edited['stops'][1]['id'], status['stops'][1]['id'])
+        self.assertEqual(edited['stops'][1]['dwell_minutes'], 8)
+
     def test_replan_without_a_fix_keeps_the_previous_start(self) -> None:
         self.trip.plan_body(self._body())
         self.position.clear()
@@ -567,6 +604,46 @@ class TripApiTests(unittest.TestCase):
         self.assertEqual(edited.get_json()['stop_count'], 2)
         self.assertEqual(edited.get_json()['stops'][0]['dwell_minutes'], 15)
 
+        target = _move(*self.origin, north_m=500)
+        preview = self.client.post('/api/trip/preview', json={
+            'start': False,
+            'walk_variation': 0,
+            'preview_id': 'p1',
+            'stops': [
+                {'id': 'aaa', 'lat': target[0], 'lng': target[1], 'label': 'Target', 'dwell_minutes': 20, 'mode': 'drive'},
+                {'id': 'bbb', 'lat': target[0], 'lng': target[1] + 0.001, 'label': 'Pin', 'dwell_minutes': 5, 'mode': 'walk'},
+                {'id': 'ccc', 'lat': target[0] + 0.004, 'lng': target[1] + 0.002, 'label': 'Next', 'dwell_minutes': 10, 'mode': 'drive', 'go_inside': False},
+            ],
+        })
+        self.assertEqual(preview.status_code, 200, preview.get_json())
+        preview_body = preview.get_json()
+        self.assertTrue(preview_body.get('preview'))
+        self.assertEqual([stop['id'] for stop in preview_body['stops']], ['aaa', 'bbb', 'ccc'])
+        self.assertGreater(preview_body['stops'][0]['distance_m'], 0)
+        preview_calls = [flag for flag in self.drive_calls]
+        self.assertTrue(preview_calls)
+        self.assertFalse(preview_calls[-1])
+        calls_before = len(self.drive_calls)
+        again = self.client.post('/api/trip/preview', json={
+            'preview_id': 'p2',
+            'stops': preview_body['stops'],
+        })
+        self.assertEqual(again.status_code, 200, again.get_json())
+        self.assertEqual(len(self.drive_calls), calls_before)
+        edited = self.client.patch('/api/v1/trip/stops/bbb', json={'dwell_minutes': 30, 'label': 'Side door'})
+        self.assertEqual(edited.status_code, 200, edited.get_json())
+        self.assertEqual(edited.get_json()['stops'][1]['label'], 'Side door')
+        self.assertEqual(edited.get_json()['stops'][1]['dwell_minutes'], 30)
+        self.assertEqual(edited.get_json()['stops'][1]['id'], 'bbb')
+        self.assertEqual(len(self.drive_calls), calls_before)
+        moved = self.client.patch('/api/v1/trip/stops/2', json={
+            'mode': 'drive',
+            'go_inside': False,
+            'dwell_minutes': 4,
+        })
+        self.assertEqual(moved.status_code, 200, moved.get_json())
+        self.assertEqual(moved.get_json()['stops'][1]['mode'], 'drive')
+        self.assertGreater(len(self.drive_calls), calls_before)
         denied = self.client.get('/api/v1/trip', environ_base={'REMOTE_ADDR': '10.1.1.5'})
         self.assertEqual(denied.status_code, 403)
         allowed = self.client.get('/api/trip', environ_base={'REMOTE_ADDR': '10.1.1.5'})

@@ -125,6 +125,63 @@ case "$cmd" in
         curl -sS "${BASE}/api/v1/trip/library"
         echo
         ;;
+      edit)
+        ref="${2:-}"
+        need "a stop number or id" "$ref"
+        shift 2
+        payload="$(python3 - "$ref" "$@" <<'PY'
+import json, sys
+args = sys.argv[2:]
+patch = {}
+i = 0
+while i < len(args):
+    arg = args[i]
+    if arg == "--dwell":
+        patch["dwell_minutes"] = float(args[i + 1])
+        i += 2
+    elif arg == "--to":
+        patch["to"] = args[i + 1]
+        i += 2
+    elif arg == "--mode":
+        patch["mode"] = args[i + 1]
+        i += 2
+    elif arg == "--label":
+        patch["label"] = args[i + 1]
+        i += 2
+    elif arg == "--lat":
+        patch["lat"] = float(args[i + 1])
+        i += 2
+    elif arg == "--lng":
+        patch["lng"] = float(args[i + 1])
+        i += 2
+    elif arg == "--inside":
+        patch["go_inside"] = True
+        i += 1
+    elif arg == "--park":
+        patch["go_inside"] = False
+        i += 1
+    elif arg in ("--pass", "--waypoint"):
+        patch["waypoint"] = True
+        i += 1
+    elif arg == "--up":
+        patch["move"] = "up"
+        i += 1
+    elif arg == "--down":
+        patch["move"] = "down"
+        i += 1
+    elif arg == "--delete":
+        patch["delete"] = True
+        i += 1
+    else:
+        raise SystemExit("geoportctl: unknown edit option: " + arg)
+if not patch:
+    raise SystemExit("geoportctl: nothing to change")
+print(json.dumps(patch))
+PY
+)"
+        curl -sS -X PATCH -H 'Content-Type: application/json' -d "$payload" "${BASE}/api/v1/trip/stops/${ref}"
+        echo
+        ;;
       save)
         name="${2:-}"
         need "a name" "$name"
@@ -273,6 +330,8 @@ geoportctl — local GeoPort automation (curl to localhost)
   geoportctl trip --file trip.json [--no-start] [--no-stops] [--offset 10] [--walk-speed 1.3]
   geoportctl trip status | pause | resume | skip | stop
   geoportctl trip save NAME | load NAME [--start] | library
+  geoportctl trip edit N --dwell 30 --to "Costco" --mode walk
+  geoportctl trip edit N --label NAME --inside|--park|--pass --up|--down|--delete
 EOF
     ;;
   *)

@@ -291,6 +291,20 @@
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .trip-meta { font-size: 12px; color: var(--text-secondary); }
+        .trip-stop.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+        .trip-stop.routing .trip-meta { color: var(--accent); }
+        .trip-stop { cursor: pointer; }
+        .trip-edit {
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid var(--border-strong);
+            background: rgba(15, 23, 42, 0.35);
+        }
+        .trip-edit.open { display: flex; }
+        .trip-pin-num.selected { box-shadow: 0 0 0 3px #f8fafc, 0 6px 16px rgba(2, 6, 23, 0.35); }
         .trip-actions { display: flex; gap: 4px; }
         .trip-actions button {
             width: 28px; height: 28px; border-radius: 8px;
@@ -684,6 +698,41 @@
                         <button type="button" class="btn" id="tripPinBtn" onclick="toggleTripPin()">Add pin from map</button>
                     </div>
                     <div id="tripStopList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <div id="tripEdit" class="trip-edit">
+                        <div class="card-header">
+                            <span id="tripEditTitle">Edit stop</span>
+                            <button type="button" class="btn btn-compact" onclick="closeTripEditor()">Close</button>
+                        </div>
+                        <input type="text" id="tripEditLabel" placeholder="Label" aria-label="Stop label">
+                        <div class="search-wrap">
+                            <input type="text" id="tripEditSearch" placeholder="New place, address, or lat, lng" autocomplete="off">
+                            <div class="search-results" id="tripEditResults"></div>
+                        </div>
+                        <div class="btn-row">
+                            <button type="button" class="btn" onclick="searchTripEditPlace()">Move to place</button>
+                            <button type="button" class="btn" id="tripRelocateBtn" onclick="toggleTripRelocate()">Pick on map</button>
+                        </div>
+                        <div class="btn-row">
+                            <button type="button" class="chip" id="tripEditDrive" onclick="setEditedMode('drive')">Drive</button>
+                            <button type="button" class="chip" id="tripEditWalk" onclick="setEditedMode('walk')">Walk</button>
+                        </div>
+                        <div class="btn-row">
+                            <button type="button" class="chip" id="tripEditDwellType" onclick="setEditedPass(false)">Dwell</button>
+                            <button type="button" class="chip" id="tripEditPassType" onclick="setEditedPass(true)">Pass through</button>
+                        </div>
+                        <div class="btn-row" id="tripEditInsideRow">
+                            <button type="button" class="chip" id="tripEditInside" onclick="setEditedInside(true)">Go inside</button>
+                            <button type="button" class="chip" id="tripEditPark" onclick="setEditedInside(false)">Park only</button>
+                        </div>
+                        <label style="font-size: 12.5px; color: var(--text-secondary);">Dwell minutes
+                            <input type="number" id="tripEditDwell" min="0" max="1440" step="1" value="0" aria-label="Edit dwell minutes">
+                        </label>
+                        <div class="btn-row">
+                            <button type="button" class="btn" onclick="moveEditedStop(-1)">Up</button>
+                            <button type="button" class="btn" onclick="moveEditedStop(1)">Down</button>
+                            <button type="button" class="btn btn-danger" onclick="deleteEditedStop()">Delete</button>
+                        </div>
+                    </div>
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
                         <input type="checkbox" id="tripSigns" checked>
                         Stop at signs &amp; signals
@@ -1062,7 +1111,17 @@
             map.on('dblclick', (e) => {
                 placePin(e.latlng.lat, e.latlng.lng, false);
             });
+            map.on('dragstart', () => {
+                if (!tripFitting) tripUserMovedAt = Date.now();
+            });
+            map.on('zoomstart', (e) => {
+                if (!tripFitting && e.originalEvent) tripUserMovedAt = Date.now();
+            });
             map.on('click', (e) => {
+                if (tripRelocate) {
+                    relocateEditedStop(e.latlng.lat, e.latlng.lng);
+                    return;
+                }
                 if (tripPick) {
                     addTripPin(e.latlng.lat, e.latlng.lng);
                     return;
@@ -2114,6 +2173,30 @@
                     if (ev.key === 'Enter') { ev.preventDefault(); addTripFromSearch(); }
                 });
             }
+            const editLabel = document.getElementById('tripEditLabel');
+            if (editLabel) {
+                editLabel.addEventListener('input', () => {
+                    const stop = editedStop();
+                    if (!stop) return;
+                    stop.label = editLabel.value;
+                    noteTripDetail();
+                });
+            }
+            const editDwell = document.getElementById('tripEditDwell');
+            if (editDwell) {
+                editDwell.addEventListener('input', () => {
+                    const stop = editedStop();
+                    if (!stop || stop.waypoint) return;
+                    stop.dwell_minutes = Math.max(0, Number(editDwell.value) || 0);
+                    noteTripDetail();
+                });
+            }
+            const editSearch = document.getElementById('tripEditSearch');
+            if (editSearch) {
+                editSearch.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); searchTripEditPlace(); }
+                });
+            }
 
             document.getElementById('searchInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
@@ -2153,6 +2236,22 @@
         let tripDrawnKey = '';
         let tripLive = null;
         let tripState = 'idle';
+        let tripSelected = -1;
+        let tripRelocate = false;
+        let tripFitting = false;
+        let tripDragging = false;
+        let tripUserMovedAt = 0;
+        let tripPreviewTimer = null;
+        let tripPreviewId = 0;
+        let tripGeomSig = '';
+
+        function tripStopId() {
+            return Math.random().toString(16).slice(2, 10);
+        }
+
+        function userPannedRecently() {
+            return tripUserMovedAt > 0 && (Date.now() - tripUserMovedAt) < 8000;
+        }
 
         function setTripMode(mode) {
             tripMode = mode === 'walk' ? 'walk' : 'drive';
@@ -2194,18 +2293,26 @@
             return tripState === 'playing' || tripState === 'paused';
         }
 
+        function tripLegBlurb(stop) {
+            const mode = stop.mode === 'walk' ? 'walk' : 'drive';
+            const dwell = Number(stop.dwell_minutes) || 0;
+            const kind = stop.waypoint ? 'pass-through' : (mode === 'walk' ? 'on foot' : (stop.go_inside === false ? 'park' : 'inside'));
+            let stats = '';
+            if (stop.route_state === 'routing') stats = ' · routing…';
+            else if (stop.route_state === 'error') stats = ' · route failed';
+            else if (stop.distance_m) stats = ` · ${(Number(stop.distance_m) / 1000).toFixed(1)} km · ${formatDriveClock(stop.travel_s)}`;
+            return `${mode} · ${kind} · ${dwell} min${stats}`;
+        }
+
         function renderTripEditor() {
             const list = document.getElementById('tripStopList');
             if (!list) return;
             list.innerHTML = '';
             tripStops.forEach((stop, index) => {
                 const row = document.createElement('div');
-                row.className = 'trip-stop';
+                row.className = 'trip-stop' + (index === tripSelected ? ' selected' : '') + (stop.route_state === 'routing' ? ' routing' : '');
                 row.draggable = true;
                 row.dataset.index = String(index);
-                const mode = stop.mode === 'walk' ? 'walk' : 'drive';
-                const dwell = Number(stop.dwell_minutes) || 0;
-                const kind = stop.waypoint ? 'pass-through' : (mode === 'walk' ? 'on foot' : (stop.go_inside === false ? 'park' : 'inside'));
                 row.innerHTML = `
                     <div class="trip-num">${index + 1}</div>
                     <div class="trip-stop-main">
@@ -2218,20 +2325,22 @@
                         <button type="button" title="Remove" aria-label="Remove stop">✕</button>
                     </div>`;
                 row.querySelector('strong').textContent = stop.label || 'Pin';
-                row.querySelector('.trip-meta').textContent = `${mode} · ${kind} · ${dwell} min`;
+                row.querySelector('.trip-meta').textContent = tripLegBlurb(stop);
                 const buttons = row.querySelectorAll('button');
-                buttons[0].onclick = () => moveTripStop(index, -1);
-                buttons[1].onclick = () => moveTripStop(index, 1);
-                buttons[2].onclick = () => removeTripStop(index);
+                buttons[0].onclick = (ev) => { ev.stopPropagation(); moveTripStop(index, -1); };
+                buttons[1].onclick = (ev) => { ev.stopPropagation(); moveTripStop(index, 1); };
+                buttons[2].onclick = (ev) => { ev.stopPropagation(); removeTripStop(index); };
+                row.addEventListener('click', () => openTripEditor(index));
                 row.addEventListener('dragstart', () => { tripDragIndex = index; });
                 row.addEventListener('dragover', (ev) => ev.preventDefault());
                 row.addEventListener('drop', () => {
                     if (tripDragIndex === null || tripDragIndex === index) return;
-                    const [item] = tripStops.splice(tripDragIndex, 1);
+                    const from = tripDragIndex;
+                    const [item] = tripStops.splice(from, 1);
                     tripStops.splice(index, 0, item);
                     tripDragIndex = null;
-                    renderTripEditor();
-                    if (tripRunning()) syncTripStops();
+                    if (tripSelected === from) tripSelected = index;
+                    noteTripStructure(Math.min(from, index));
                 });
                 list.appendChild(row);
             });
@@ -2242,20 +2351,76 @@
             if (next < 0 || next >= tripStops.length) return;
             const [item] = tripStops.splice(index, 1);
             tripStops.splice(next, 0, item);
-            renderTripEditor();
-            if (tripRunning()) syncTripStops();
+            if (tripSelected === index) tripSelected = next;
+            else if (tripSelected === next) tripSelected = index;
+            noteTripStructure(Math.min(index, next));
         }
 
         function removeTripStop(index) {
             tripStops.splice(index, 1);
-            renderTripEditor();
-            if (tripRunning()) syncTripStops();
+            if (tripSelected === index) closeTripEditor();
+            else if (tripSelected > index) tripSelected -= 1;
+            noteTripStructure(index);
         }
 
         function pushTripStop(stop) {
+            if (!stop.id) stop.id = tripStopId();
             tripStops.push(stop);
+            noteTripStructure(tripStops.length - 1);
+        }
+
+        function noteTripStructure(fromIndex) {
+            for (let i = Math.max(0, fromIndex); i < tripStops.length; i++) {
+                tripStops[i].parts = [];
+                tripStops[i].distance_m = null;
+                tripStops[i].travel_s = null;
+                tripStops[i].route_state = 'routing';
+            }
             renderTripEditor();
-            if (tripRunning()) syncTripStops();
+            drawTrip({ stops: tripStops }, { fit: true });
+            scheduleTripPreview();
+        }
+
+        function noteTripDetail() {
+            renderTripEditor();
+            scheduleTripPreview();
+        }
+
+        function scheduleTripPreview() {
+            clearTimeout(tripPreviewTimer);
+            tripPreviewTimer = setTimeout(sendTripPreview, 300);
+        }
+
+        async function sendTripPreview() {
+            if (!tripStops.length) {
+                drawTrip({ stops: [] }, { fit: false });
+                return;
+            }
+            const id = String(++tripPreviewId);
+            const payload = tripPayload(false);
+            payload.preview_id = id;
+            payload.start = false;
+            try {
+                const response = await fetch('/api/trip/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await response.json();
+                if (id !== String(tripPreviewId)) return;
+                if (!response.ok || !data.ok) {
+                    showToast(data.error || 'Could not route the trip');
+                    tripStops.forEach((stop) => { if (stop.route_state === 'routing') stop.route_state = 'error'; });
+                    renderTripEditor();
+                    return;
+                }
+                absorbTripStats(data);
+                renderTripEditor();
+                drawTrip({ stops: tripStops }, { fit: !userPannedRecently() });
+            } catch (e) {
+                if (id !== String(tripPreviewId)) return;
+                showToast('Could not route the trip');
+            }
         }
 
         function addTripPin(lat, lng) {
@@ -2505,8 +2670,8 @@
             return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
         }
 
-        function drawTrip(data) {
-            if (!map) return;
+        function drawTrip(data, opts) {
+            if (!map || tripDragging) return;
             if (!tripLayer) tripLayer = L.layerGroup().addTo(map);
             tripLayer.clearLayers();
             const bounds = [];
@@ -2519,12 +2684,13 @@
                         color: walk ? '#34d399' : '#38bdf8',
                         weight: walk ? 4 : 5,
                         opacity: 0.95,
-                        dashArray: walk ? '7 7' : null,
+                        dashArray: walk ? '8 7' : null,
                     }).addTo(tripLayer);
                     latlngs.forEach((point) => bounds.push(point));
                 });
                 const classes = ['trip-pin-num'];
                 if (stop.status === 'current') classes.push('current');
+                if (index === tripSelected) classes.push('selected');
                 if (stop.mode === 'walk') classes.push('walk');
                 const icon = L.divIcon({
                     className: 'trip-pin',
@@ -2532,13 +2698,198 @@
                     iconSize: [28, 28],
                     iconAnchor: [14, 14],
                 });
-                L.marker([stop.lat, stop.lng], { icon, interactive: false }).addTo(tripLayer);
+                const marker = L.marker([stop.lat, stop.lng], { icon, draggable: true, autoPan: true }).addTo(tripLayer);
+                marker.on('click', (ev) => {
+                    if (ev.originalEvent) L.DomEvent.stopPropagation(ev);
+                    openTripEditor(index);
+                });
+                marker.on('dragstart', () => { tripDragging = true; tripUserMovedAt = Date.now(); });
+                marker.on('dragend', (ev) => {
+                    tripDragging = false;
+                    const ll = ev.target.getLatLng();
+                    if (!tripStops[index]) return;
+                    tripStops[index].lat = ll.lat;
+                    tripStops[index].lng = ll.lng;
+                    noteTripStructure(index);
+                });
                 bounds.push([stop.lat, stop.lng]);
             });
-            const key = (data.stops || []).map((stop) => `${stop.id}:${(stop.parts || []).map((part) => part.role).join(',')}`).join('|');
-            if (key && key !== tripDrawnKey && bounds.length > 1) {
+            const key = (data.stops || []).map((stop) => `${stop.id}:${(stop.parts || []).map((part) => part.role).join(',')}:${Number(stop.lat).toFixed(4)}`).join('|');
+            const shouldFit = !opts || opts.fit !== false;
+            if (shouldFit && key && bounds.length > 1 && !userPannedRecently()) {
                 tripDrawnKey = key;
-                map.fitBounds(bounds, { padding: [64, 64] });
+                tripFitting = true;
+                map.fitBounds(bounds, { paddingTopLeft: [520, 40], paddingBottomRight: [48, 48] });
+                setTimeout(() => { tripFitting = false; }, 450);
+            }
+        }
+
+        function absorbTripStats(data) {
+            (data.stops || []).forEach((remote, index) => {
+                const local = (remote.id && tripStops.find((stop) => stop.id === remote.id)) || tripStops[index];
+                if (!local) return;
+                local.parts = remote.parts || [];
+                local.distance_m = remote.distance_m;
+                local.travel_s = remote.travel_s;
+                local.walk_in_s = remote.walk_in_s;
+                local.route_state = remote.route_state || (remote.parts && remote.parts.length ? 'ready' : local.route_state);
+                local.status = remote.status;
+                if (remote.id) local.id = remote.id;
+            });
+        }
+
+        function openTripEditor(index) {
+            const stop = tripStops[index];
+            if (!stop) return;
+            if (tripRunning() && stop.status === 'done') {
+                showToast('That stop is already finished');
+                return;
+            }
+            tripSelected = index;
+            const panel = document.getElementById('tripEdit');
+            panel.classList.add('open');
+            document.getElementById('tripEditTitle').textContent = `Edit stop ${index + 1}`;
+            document.getElementById('tripEditLabel').value = stop.label || '';
+            document.getElementById('tripEditDwell').value = String(Number(stop.dwell_minutes) || 0);
+            document.getElementById('tripEditSearch').value = '';
+            syncEditChips(stop);
+            renderTripEditor();
+            drawTrip({ stops: tripStops }, { fit: false });
+        }
+
+        function closeTripEditor() {
+            tripSelected = -1;
+            tripRelocate = false;
+            const panel = document.getElementById('tripEdit');
+            if (panel) panel.classList.remove('open');
+            const btn = document.getElementById('tripRelocateBtn');
+            if (btn) btn.classList.remove('btn-primary');
+            renderTripEditor();
+            drawTrip({ stops: tripStops }, { fit: false });
+        }
+
+        function syncEditChips(stop) {
+            const walk = stop.mode === 'walk';
+            document.getElementById('tripEditDrive').classList.toggle('active', !walk);
+            document.getElementById('tripEditWalk').classList.toggle('active', walk);
+            document.getElementById('tripEditDwellType').classList.toggle('active', !stop.waypoint);
+            document.getElementById('tripEditPassType').classList.toggle('active', !!stop.waypoint);
+            document.getElementById('tripEditInsideRow').style.display = walk || stop.waypoint ? 'none' : '';
+            document.getElementById('tripEditInside').classList.toggle('active', stop.go_inside !== false);
+            document.getElementById('tripEditPark').classList.toggle('active', stop.go_inside === false);
+            document.getElementById('tripEditDwell').disabled = !!stop.waypoint;
+        }
+
+        function editedStop() {
+            return tripStops[tripSelected] || null;
+        }
+
+        function setEditedMode(mode) {
+            const stop = editedStop();
+            if (!stop) return;
+            stop.mode = mode === 'walk' ? 'walk' : 'drive';
+            if (stop.mode === 'walk') stop.go_inside = false;
+            syncEditChips(stop);
+            noteTripStructure(tripSelected);
+        }
+
+        function setEditedPass(pass) {
+            const stop = editedStop();
+            if (!stop) return;
+            stop.waypoint = !!pass;
+            if (stop.waypoint) {
+                stop.dwell_minutes = 0;
+                stop.go_inside = false;
+                document.getElementById('tripEditDwell').value = '0';
+            }
+            syncEditChips(stop);
+            noteTripStructure(tripSelected);
+        }
+
+        function setEditedInside(inside) {
+            const stop = editedStop();
+            if (!stop) return;
+            stop.go_inside = !!inside;
+            stop.waypoint = false;
+            syncEditChips(stop);
+            noteTripStructure(tripSelected);
+        }
+
+        function moveEditedStop(delta) {
+            if (tripSelected < 0) return;
+            moveTripStop(tripSelected, delta);
+        }
+
+        function deleteEditedStop() {
+            if (tripSelected < 0) return;
+            removeTripStop(tripSelected);
+        }
+
+        function toggleTripRelocate() {
+            tripRelocate = !tripRelocate;
+            const btn = document.getElementById('tripRelocateBtn');
+            if (btn) btn.classList.toggle('btn-primary', tripRelocate);
+            if (map) map.getContainer().style.cursor = tripRelocate ? 'crosshair' : '';
+            if (tripRelocate) showToast('Click the map to move this stop');
+        }
+
+        function relocateEditedStop(lat, lng) {
+            const stop = editedStop();
+            tripRelocate = false;
+            const btn = document.getElementById('tripRelocateBtn');
+            if (btn) btn.classList.remove('btn-primary');
+            if (map) map.getContainer().style.cursor = '';
+            if (!stop) return;
+            stop.lat = Number(lat);
+            stop.lng = Number(lng);
+            noteTripStructure(tripSelected);
+        }
+
+        async function searchTripEditPlace() {
+            const stop = editedStop();
+            const input = document.getElementById('tripEditSearch');
+            const box = document.getElementById('tripEditResults');
+            const q = (input.value || '').trim();
+            if (!stop || !q) return;
+            const coord = q.match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/);
+            if (coord) {
+                stop.lat = parseFloat(coord[1]);
+                stop.lng = parseFloat(coord[2]);
+                input.value = '';
+                noteTripStructure(tripSelected);
+                return;
+            }
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`);
+                const items = await response.json();
+                if (!items.length) {
+                    showToast('No locations found');
+                    return;
+                }
+                const choose = (item) => {
+                    stop.lat = parseFloat(item.lat);
+                    stop.lng = parseFloat(item.lon);
+                    if (!document.getElementById('tripEditLabel').value.trim()) stop.label = item.display_name;
+                    else stop.label = document.getElementById('tripEditLabel').value.trim();
+                    input.value = '';
+                    box.style.display = 'none';
+                    noteTripStructure(tripSelected);
+                };
+                if (items.length === 1) {
+                    choose(items[0]);
+                    return;
+                }
+                box.innerHTML = '';
+                items.forEach((item) => {
+                    const div = document.createElement('div');
+                    div.className = 'search-item';
+                    div.textContent = item.display_name;
+                    div.onclick = () => choose(item);
+                    box.appendChild(div);
+                });
+                box.style.display = 'block';
+            } catch (e) {
+                showToast('Address search unavailable');
             }
         }
 
@@ -2578,7 +2929,7 @@
                 if (lines.length) lines.push(`Total ${totalKm} km · ${formatDriveClock(data.total_duration_s)}`);
                 schedule.textContent = lines.join('\n');
             }
-            drawTrip(data);
+            const geomSig = (data.stops || []).map((stop) => `${stop.id}:${stop.route_state}:${Math.round(Number(stop.distance_m) || 0)}:${(stop.parts || []).length}`).join('|');
             if (replaceEditor && Array.isArray(data.stops)) {
                 tripStops = data.stops.map((stop) => ({
                     id: stop.id,
@@ -2589,8 +2940,21 @@
                     dwell_minutes: stop.dwell_minutes,
                     go_inside: stop.go_inside,
                     waypoint: stop.waypoint,
+                    parts: stop.parts || [],
+                    distance_m: stop.distance_m,
+                    travel_s: stop.travel_s,
+                    walk_in_s: stop.walk_in_s,
+                    route_state: stop.route_state || 'ready',
+                    status: stop.status,
                 }));
                 renderTripEditor();
+                tripGeomSig = geomSig;
+                drawTrip({ stops: tripStops }, { fit: !userPannedRecently() });
+            } else if (geomSig !== tripGeomSig) {
+                tripGeomSig = geomSig;
+                absorbTripStats(data);
+                renderTripEditor();
+                drawTrip({ stops: tripStops.length ? tripStops : data.stops }, { fit: !userPannedRecently() });
             }
             document.querySelectorAll('#tripStopList .trip-stop').forEach((row, index) => {
                 const current = data.stops && data.stops[index] && data.stops[index].status === 'current';
@@ -2603,7 +2967,11 @@
                 const response = await fetch('/api/trip');
                 if (!response.ok) return;
                 const data = await response.json();
-                if (data && data.ok && data.stop_count) applyTrip(data, true);
+                if (data && data.ok && data.stop_count) {
+                    applyTrip(data, true);
+                    const edit = Number(new URLSearchParams(location.search).get('edit'));
+                    if (edit >= 1 && edit <= tripStops.length) openTripEditor(edit - 1);
+                }
             } catch (e) {}
         }
 
@@ -2674,8 +3042,19 @@
             if (d.follow_current) applyCurrentStart(currentSimulated);
         });
         socket.on('position', (d) => rememberSimulated(d));
+        socket.on('trip_preview', (d) => {
+            if (!d) return;
+            if (d.preview_id && String(d.preview_id) === String(tripPreviewId)) {
+                absorbTripStats(d);
+                renderTripEditor();
+                drawTrip({ stops: tripStops }, { fit: false });
+                return;
+            }
+            applyTrip(d, true);
+        });
         socket.on('trip', (d) => {
             if (!d) return;
+            if (d.preview_id && String(d.preview_id) === String(tripPreviewId)) return;
             applyTrip(d, false);
         });
         socket.on('drive_plan', (d) => {

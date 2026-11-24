@@ -178,6 +178,31 @@ yet. Dwell, order, mode, and destination can change while the trip is
 running. The current leg is replanned from the simulated position when its
 destination changes.
 
+Each stop keeps a stable `id`. Edit one stop with
+`PATCH /api/v1/trip/stops/{id}` or `PATCH /api/v1/trip/stops/{n}` where `n`
+is the 1-based pin number. A finished stop is rejected. A stop you have
+already arrived at can still change its label and dwell. `DELETE` on the
+same path removes it. `"move": "up"` or `"down"` reorders it among the stops
+that are not finished.
+
+```bash
+curl -sS -X PATCH -H 'Content-Type: application/json' \
+  -d '{"dwell_minutes":30,"mode":"walk","to":"Costco, Grass Valley"}' \
+  "$GEOPORT_URL/api/v1/trip/stops/2"
+
+./scripts/geoportctl trip edit 2 --dwell 30 --to "Costco, Grass Valley" --mode walk
+./scripts/geoportctl trip edit 2 --label "Lot" --park --up
+./scripts/geoportctl trip edit 2 --delete
+```
+
+The Trip card routes as you edit. `POST /api/v1/trip/preview` (and `/api/trip/preview`)
+draws the legs without waiting for stop signs or signals. Each leg is cached
+by its mode, endpoints, and go-inside choice, so an unchanged leg is not
+asked of the router again. The server emits `trip_preview` after each leg,
+and `trip` when the draft is saved. Sign and signal lookup still runs when
+you Plan or Start. The map fits the trip unless you have panned in the last
+few seconds.
+
 The trip is stored in `~/.geoport/trip.json`. If it was playing or paused
 when GeoPort stops, the next launch continues from the current simulated
 position. A dropped device does not pause the trip clock; auto-reconnect

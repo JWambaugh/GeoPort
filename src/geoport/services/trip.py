@@ -331,6 +331,7 @@ class TripStop:
     expected_signal_s: float = 0.0
     arrived_at: Optional[str] = None
     departed_at: Optional[str] = None
+    route_state: str = ''
 
     @property
     def dwell_minutes(self) -> float:
@@ -368,6 +369,7 @@ class TripStop:
             'expected_signal_s': round(self.expected_signal_s, 1),
             'arrived_at': self.arrived_at,
             'departed_at': self.departed_at,
+            'route_state': self.route_state or ('ready' if self.parts else ''),
         })
         return payload
 
@@ -398,12 +400,15 @@ class TripStop:
             expected_signal_s=float(raw.get('expected_signal_s') or 0),
             arrived_at=raw.get('arrived_at'),
             departed_at=raw.get('departed_at'),
+            route_state=str(raw.get('route_state') or ''),
         )
 
 
 def _same_place(a: TripStop, b: TripStop, meters: float = 8.0) -> bool:
     return (
         a.mode == b.mode
+        and a.go_inside == b.go_inside
+        and a.waypoint == b.waypoint
         and haversine_m(a.lat, a.lng, b.lat, b.lng) <= meters
     )
 
@@ -468,6 +473,9 @@ class TripService:
         self._rng = random.Random()
         self._last_save = 0.0
         self._closed = False
+        self._leg_cache: dict[tuple, dict[str, Any]] = {}
+        self._cache_hits = 0
+        self._preview_gen = 0
         if not manual:
             self._thread = threading.Thread(target=self._loop, name='geoport-trip', daemon=True)
             self._thread.start()
@@ -571,6 +579,80 @@ class TripService:
         self._emit()
         return self.status()
 
+    def preview_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Route the draft for the map. Stop signs wait until Plan or Start.
+
+        Unchanged legs are reused from the leg cache. A newer preview
+        supersedes one that is still walking the list.
+        """
+        raw = body.get('stops')
+        if not isinstance(raw, list):
+            raise DriveRouteError('stops must be a list')
+        if self.active:
+            if not raw:
+                raise DriveRouteError('The running trip needs its remaining stops')
+            return self.replace_stops(raw)
+        self._apply_speed_options(body)
+        if not raw:
+            self.stops = []
+            self.state = 'idle'
+            self.phase = 'idle'
+            self._queue = []
+            self._persist(force=True)
+            self._emit()
+            payload = self.status()
+            payload['preview'] = True
+            payload['preview_id'] = body.get('preview_id')
+            self._emit_named('trip_preview', payload)
+            return payload
+        origin = self._origin_from_body(body)
+        resolved = [self._resolve(item) for item in raw]
+        self._preview_gen += 1
+        gen = self._preview_gen
+        preview_id = body.get('preview_id')
+        self.stops = resolved
+        self.origin = origin
+        self.index = 0
+        self.phase = 'idle'
+        self.state = 'idle'
+        self._queue = []
+        self._car = origin
+        self._in_car = True
+        self._error = None
+        self._build_preview(origin, include_stops=False, preview_id=preview_id, emit_each=True, generation=gen)
+        if gen != self._preview_gen:
+            return self.status()
+        self._persist(force=True)
+        self._emit()
+        payload = self.status()
+        payload['preview'] = True
+        payload['preview_id'] = preview_id
+        return payload
+
+    def update_stop(self, ref: str, patch: dict[str, Any]) -> dict[str, Any]:
+        """Edit one stop by its stable id or its 1-based number."""
+        if not isinstance(patch, dict):
+            raise DriveRouteError('JSON object expected')
+        index = self._find_stop(ref)
+        if patch.get('delete') or patch.get('op') == 'delete':
+            return self._delete_stop(index)
+        move = patch.get('move')
+        if move in ('up', 'down', -1, 1, '-1', '1'):
+            return self._move_stop(index, move)
+        self._ensure_editable(index, patch)
+        merged = self._merge_stop(self.stops[index], patch)
+        stops = [stop.to_input() for stop in self.stops]
+        stops[index] = merged
+        if self.active:
+            return self.replace_stops(stops)
+        return self.preview_body({
+            'stops': stops,
+            'from': {'lat': self.origin[0], 'lng': self.origin[1]} if self.origin else None,
+            'preview_id': patch.get('preview_id'),
+            'walk_speed_mps': self.walk_speed,
+            'speed_offset_pct': self.offset,
+        })
+
     def start(self) -> dict[str, Any]:
         if not self.stops:
             raise DriveRouteError('Add at least one stop')
@@ -590,10 +672,10 @@ class TripService:
                 self.origin = person
                 self._car = person
                 self._in_car = True
-                self._build_preview(person)
             elif self._car is None:
                 self._car = person
                 self._in_car = True
+            self._build_preview(self.origin or person, include_stops=self.include_stops)
             with self._step_lock:
                 self._begin_stop(0)
         except Exception:
@@ -696,7 +778,7 @@ class TripService:
             self.phase = 'idle'
             self._car = origin
             self._in_car = True
-            self._build_preview(origin)
+            self._build_preview(origin, include_stops=False, emit_each=True)
             self._persist(force=True)
             self._emit()
             return self.status()
@@ -1105,19 +1187,50 @@ class TripService:
         )
         return stop
 
-    def _build_preview(self, origin: tuple[float, float]) -> None:
+    def _build_preview(
+        self,
+        origin: tuple[float, float],
+        include_stops: Optional[bool] = None,
+        preview_id: Any = None,
+        emit_each: bool = False,
+        generation: Optional[int] = None,
+    ) -> None:
+        signs = self.include_stops if include_stops is None else bool(include_stops)
         person = origin
         car = origin
-        for stop in self.stops:
-            self._fill_preview(stop, person, car)
+        for index, stop in enumerate(self.stops):
+            if generation is not None and generation != self._preview_gen:
+                return
+            if emit_each:
+                stop.route_state = 'routing'
+                self._emit_preview(preview_id, index)
+            try:
+                self._fill_preview(stop, person, car, include_stops=signs)
+                stop.route_state = 'ready'
+            except Exception as exc:
+                if not emit_each:
+                    raise
+                logger.info(f'Trip preview skipped a leg: {exc}')
+                stop.route_state = 'error'
+                stop.parts = []
             person, car = self._pose_after(stop, person, car)
+            if emit_each:
+                self._emit_preview(preview_id, index)
 
     def _fill_preview(
         self,
         stop: TripStop,
         person: tuple[float, float],
         car: tuple[float, float],
+        include_stops: Optional[bool] = None,
     ) -> None:
+        use_signs = self.include_stops if include_stops is None else bool(include_stops)
+        key = self._leg_key(stop, person, car, use_signs)
+        cached = self._leg_cache.get(key)
+        if cached is not None:
+            self._apply_leg_cache(stop, cached)
+            self._cache_hits += 1
+            return
         parts: list[dict[str, Any]] = []
         travel = 0.0
         distance = 0.0
@@ -1138,7 +1251,7 @@ class TripService:
                     walk_s += back.duration_s
                     travel += back.duration_s
                     distance += back.distance_m
-            plan, road = self._drive_router(car, (stop.lat, stop.lng), self.include_stops, self.offset)
+            plan, road = self._drive_router(car, (stop.lat, stop.lng), use_signs, self.offset)
             stop.road_lat, stop.road_lng = road
             summary = plan.stops_summary or {}
             signs = int(summary.get('stop_signs') or 0)
@@ -1192,6 +1305,8 @@ class TripService:
         stop.stop_signs = signs
         stop.signals = signals
         stop.expected_signal_s = expected
+        stop.route_state = 'ready'
+        self._store_leg_cache(key, stop)
 
     def _pose_after(
         self,
@@ -1745,11 +1860,180 @@ class TripService:
             return f'{prefix}Walking back to the car'
         return prefix + 'Trip'
 
+    def _apply_speed_options(self, body: dict[str, Any]) -> None:
+        if body.get('speed_offset_pct') is not None:
+            self.offset = float(body.get('speed_offset_pct') or 0)
+        if body.get('walk_speed_mps') is not None:
+            self.walk_speed = min(WALK_MAX_MPS, max(WALK_MIN_MPS, float(body['walk_speed_mps'])))
+
+    def _round_pair(self, pair: tuple[float, float]) -> tuple[float, float]:
+        return (round(float(pair[0]), 5), round(float(pair[1]), 5))
+
+    def _leg_key(
+        self,
+        stop: TripStop,
+        person: tuple[float, float],
+        car: tuple[float, float],
+        signs: bool,
+    ) -> tuple:
+        return (
+            stop.mode,
+            bool(stop.go_inside),
+            bool(stop.waypoint),
+            self._round_pair(person),
+            self._round_pair(car),
+            self._round_pair((stop.lat, stop.lng)),
+            round(float(self.walk_speed), 2),
+            round(float(self.offset), 2),
+            bool(signs),
+        )
+
+    def _store_leg_cache(self, key: tuple, stop: TripStop) -> None:
+        self._leg_cache[key] = {
+            'parts': json.loads(json.dumps(stop.parts)),
+            'road_lat': stop.road_lat,
+            'road_lng': stop.road_lng,
+            'distance_m': stop.distance_m,
+            'travel_s': stop.travel_s,
+            'drive_s': stop.drive_s,
+            'walk_s': stop.walk_s,
+            'walk_in_s': stop.walk_in_s,
+            'walk_back_s': stop.walk_back_s,
+            'stop_signs': stop.stop_signs,
+            'signals': stop.signals,
+            'expected_signal_s': stop.expected_signal_s,
+        }
+        while len(self._leg_cache) > 128:
+            self._leg_cache.pop(next(iter(self._leg_cache)))
+
+    def _apply_leg_cache(self, stop: TripStop, cached: dict[str, Any]) -> None:
+        stop.parts = json.loads(json.dumps(cached['parts']))
+        stop.road_lat = cached['road_lat']
+        stop.road_lng = cached['road_lng']
+        stop.distance_m = cached['distance_m']
+        stop.travel_s = cached['travel_s']
+        stop.drive_s = cached['drive_s']
+        stop.walk_s = cached['walk_s']
+        stop.walk_in_s = cached['walk_in_s']
+        stop.walk_back_s = cached['walk_back_s']
+        stop.stop_signs = cached['stop_signs']
+        stop.signals = cached['signals']
+        stop.expected_signal_s = cached['expected_signal_s']
+        stop.route_state = 'ready'
+
+    def _find_stop(self, ref: str) -> int:
+        text = str(ref or '').strip()
+        if not text:
+            raise DriveRouteError('A stop id or number is required', status=404)
+        for index, stop in enumerate(self.stops):
+            if stop.id == text:
+                return index
+        if text.isdigit():
+            number = int(text)
+            if 1 <= number <= len(self.stops):
+                return number - 1
+        raise DriveRouteError(f'No stop {text}', status=404)
+
+    def _route_fields(self, patch: dict[str, Any]) -> bool:
+        keys = ('mode', 'lat', 'lng', 'to', 'address', 'go_inside', 'inside', 'waypoint', 'move')
+        return any(key in patch for key in keys)
+
+    def _ensure_editable(self, index: int, patch: dict[str, Any]) -> None:
+        if not self.active:
+            return
+        if index < self.index:
+            raise DriveRouteError('That stop is already finished')
+        stop = self.stops[index]
+        if stop.arrived_at and self._route_fields(patch):
+            raise DriveRouteError('Already at this stop. You can still change the dwell or the label.')
+
+    def _merge_stop(self, stop: TripStop, patch: dict[str, Any]) -> dict[str, Any]:
+        data = stop.to_input()
+        if patch.get('label') is not None:
+            data['label'] = str(patch['label'])
+        if patch.get('mode') is not None:
+            data['mode'] = str(patch['mode'])
+        if patch.get('dwell_minutes') is not None:
+            data['dwell_minutes'] = patch['dwell_minutes']
+        elif patch.get('dwell') is not None:
+            data['dwell_minutes'] = patch['dwell']
+        if 'go_inside' in patch or 'inside' in patch:
+            data['go_inside'] = _as_bool(patch.get('go_inside', patch.get('inside')), True)
+        if 'waypoint' in patch:
+            data['waypoint'] = _as_bool(patch.get('waypoint'), False)
+        if data.get('waypoint'):
+            data['dwell_minutes'] = 0
+            data['go_inside'] = False
+        destination = patch.get('to') if patch.get('to') is not None else patch.get('address')
+        if destination is not None:
+            lat, lng, label = resolve_place(destination, self._geocoder)
+            data['lat'] = lat
+            data['lng'] = lng
+            if patch.get('label') is None:
+                data['label'] = label
+        if patch.get('lat') is not None or patch.get('lng') is not None:
+            try:
+                data['lat'] = float(patch.get('lat', data['lat']))
+                data['lng'] = float(patch.get('lng', data['lng']))
+            except (TypeError, ValueError) as exc:
+                raise DriveRouteError('lat and lng must be numbers') from exc
+            Coordinate(latitude=data['lat'], longitude=data['lng']).validate()
+        data['id'] = stop.id
+        return data
+
+    def _delete_stop(self, index: int) -> dict[str, Any]:
+        if self.active and index < self.index:
+            raise DriveRouteError('That stop is already finished')
+        if len(self.stops) == 1:
+            if self.active:
+                return self.stop(user=True)
+            self.stops = []
+            self._persist(force=True)
+            self._emit()
+            payload = self.status()
+            payload['preview'] = True
+            self._emit_named('trip_preview', payload)
+            return payload
+        kept = [stop.to_input() for i, stop in enumerate(self.stops) if i != index]
+        if self.active:
+            return self.replace_stops(kept)
+        origin = self.origin
+        return self.preview_body({
+            'stops': kept,
+            'from': None if origin is None else {'lat': origin[0], 'lng': origin[1]},
+        })
+
+    def _move_stop(self, index: int, direction: Any) -> dict[str, Any]:
+        delta = -1 if str(direction) in ('up', '-1') else 1
+        floor = self.index if self.active else 0
+        dest = index + delta
+        if index < floor or dest < floor or dest >= len(self.stops):
+            raise DriveRouteError('That stop cannot move there')
+        ordered = [stop.to_input() for stop in self.stops]
+        ordered[index], ordered[dest] = ordered[dest], ordered[index]
+        if self.active:
+            return self.replace_stops(ordered)
+        origin = self.origin
+        return self.preview_body({
+            'stops': ordered,
+            'from': None if origin is None else {'lat': origin[0], 'lng': origin[1]},
+        })
+
     def _emit(self) -> None:
+        self._emit_named('trip', self.status())
+
+    def _emit_preview(self, preview_id: Any, leg_index: int) -> None:
+        payload = self.status()
+        payload['preview'] = True
+        payload['preview_id'] = preview_id
+        payload['routed_through'] = leg_index
+        self._emit_named('trip_preview', payload)
+
+    def _emit_named(self, event: str, payload: dict[str, Any]) -> None:
         if self._emit_fn is None:
             return
         try:
-            self._emit_fn('trip', self.status())
+            self._emit_fn(event, payload)
         except Exception as exc:
             logger.debug(f'Trip emit failed: {exc}')
 
@@ -1915,6 +2199,18 @@ def register_trip_routes(app: Any, trip: TripService) -> None:
     @app.route('/api/trip/stop', methods=['POST'])
     def trip_stop() -> Any:
         return respond(lambda: trip.stop(user=True))
+
+    @app.route('/api/v1/trip/preview', methods=['POST'])
+    @app.route('/api/trip/preview', methods=['POST'])
+    def trip_preview() -> Any:
+        return respond(lambda: trip.preview_body(body()))
+
+    @app.route('/api/v1/trip/stops/<ref>', methods=['PATCH', 'DELETE'])
+    @app.route('/api/trip/stops/<ref>', methods=['PATCH', 'DELETE'])
+    def trip_stop_one(ref: str) -> Any:
+        if request.method == 'DELETE':
+            return respond(lambda: trip.update_stop(ref, {'delete': True}))
+        return respond(lambda: trip.update_stop(ref, body()))
 
     @app.route('/api/v1/trip/stops', methods=['POST', 'PATCH'])
     @app.route('/api/trip/stops', methods=['POST', 'PATCH'])
