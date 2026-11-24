@@ -504,6 +504,56 @@
 
             <!-- TAB 3: ROUTES & GPX -->
             <div class="tab-pane" id="tab-routes">
+                <div class="card" id="driveCard">
+                    <div class="card-header">
+                        <span>Drive</span>
+                        <span class="mono" id="driveStatus" style="color: var(--accent);">Idle</span>
+                    </div>
+                    <div style="font-size: 11.5px; color: var(--text-secondary); line-height: 1.45;">
+                        Real roads from start to destination. Each segment uses the posted limit when OpenStreetMap has one, otherwise the router estimate, then a speed for the road class.
+                    </div>
+                    <div class="chip-grid" id="driveProviders">
+                        <button type="button" class="chip active" onclick="setDriveProvider('osrm', this)">OSRM</button>
+                        <button type="button" class="chip" onclick="setDriveProvider('google', this)">Google</button>
+                    </div>
+                    <div style="font-size: 11.5px; color: var(--text-secondary);">Start</div>
+                    <div class="search-wrap">
+                        <input type="text" id="driveStartInput" placeholder="Address, place, or lat, lng" autocomplete="off">
+                        <div class="search-results" id="driveStartResults"></div>
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="btn" id="drivePickStartBtn" onclick="setDrivePick('start')">Map start</button>
+                        <button type="button" class="btn" onclick="useCurrentAsDriveStart()">Use current pin</button>
+                    </div>
+                    <div style="font-size: 11.5px; color: var(--text-secondary);">Destination</div>
+                    <div class="search-wrap">
+                        <input type="text" id="driveEndInput" placeholder="Address, place, or lat, lng" autocomplete="off">
+                        <div class="search-results" id="driveEndResults"></div>
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="btn" id="drivePickEndBtn" onclick="setDrivePick('end')">Map destination</button>
+                        <button type="button" class="btn btn-primary" id="drivePlanBtn" onclick="planDrive()">Plan drive</button>
+                    </div>
+                    <div class="card-header">
+                        <span>Speed offset</span>
+                        <span class="mono" id="driveOffsetReadout">0%</span>
+                    </div>
+                    <input type="range" id="driveOffset" min="-40" max="40" value="0" step="5" oninput="onDriveOffset(this.value)" style="accent-color: var(--accent);" aria-label="Speed offset percent">
+                    <div id="driveSummary" style="font-size: 12px; color: var(--text-secondary); line-height: 1.45;"></div>
+                    <div class="progress-track"><div class="progress-fill" id="driveProgress"></div></div>
+                    <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-secondary);">
+                        <span id="driveProgressText">Not planned</span>
+                        <span class="mono" id="driveEta"></span>
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="btn btn-emerald" id="drivePlayBtn" onclick="drivePlayPause()" disabled>
+                            <i class="fa-solid fa-play" id="drivePlayIcon"></i> <span id="drivePlayLabel">Start drive</span>
+                        </button>
+                        <button type="button" class="btn btn-danger" id="driveStopBtn" onclick="driveStop()">Stop</button>
+                    </div>
+                    <button type="button" class="btn" onclick="promptGoogleKey()">Google API key</button>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <span>Movement Speed</span>
@@ -628,6 +678,19 @@
         let isPlayingRoute = false;
         let playbackIdx = 0;
         let playbackTimer = null;
+
+        // Speed-limit drive. The server owns the clock and pushes /set_location.
+        let driveLayerGroup = null;
+        let driveLine = null;
+        let driveStartMarker = null;
+        let driveEndMarker = null;
+        let driveStart = null;
+        let driveEnd = null;
+        let drivePickTarget = null;
+        let driveProvider = 'osrm';
+        let driveOffset = 0;
+        let driveUiState = 'idle';
+        let driveHasPlan = false;
 
         let mapLayersCatalog = [];
         let mapLayerDefaults = {};
@@ -776,6 +839,7 @@
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.getElementById('tab-' + tabId).classList.add('active');
             btnEl.classList.add('active');
+            if (tabId !== 'routes' && drivePickTarget) setDrivePick(null);
         }
 
         function pickDefaultLayerForTheme(theme) {
@@ -818,6 +882,7 @@
             map = L.map('map', { zoomControl: false, doubleClickZoom: false }).setView([-27.4705, 153.0260], 12);
             L.control.zoom({ position: 'topright' }).addTo(map);
             drawnLayerGroup.addTo(map);
+            driveLayerGroup = L.layerGroup().addTo(map);
 
             const savedTheme = localStorage.getItem('geoport_theme') || 'dark';
             document.documentElement.setAttribute('data-theme', savedTheme);
@@ -834,12 +899,19 @@
                 placePin(e.latlng.lat, e.latlng.lng, false);
             });
             map.on('click', (e) => {
+                if (drivePickTarget) {
+                    setDrivePoint(drivePickTarget, e.latlng.lat, e.latlng.lng);
+                    return;
+                }
                 if (!isDrawingRoute) return;
                 addRouteWaypoint(e.latlng.lat, e.latlng.lng);
             });
         }
 
-        function placePin(lat, lng, pan = true) {
+        function placePin(lat, lng, pan = true, notify = true) {
+            if (notify && (driveUiState === 'playing' || driveUiState === 'paused')) {
+                stopDriveQuiet();
+            }
             selectedCoords = { lat: Number(lat), lng: Number(lng) };
             if (!pinMarker) {
                 pinMarker = L.marker([selectedCoords.lat, selectedCoords.lng], { draggable: true }).addTo(map);
@@ -854,10 +926,11 @@
             if (pan) map.setView([selectedCoords.lat, selectedCoords.lng], Math.max(map.getZoom(), 14));
 
             const formatted = `${selectedCoords.lat.toFixed(6)}, ${selectedCoords.lng.toFixed(6)}`;
-            document.getElementById('searchInput').value = formatted;
+            if (notify) document.getElementById('searchInput').value = formatted;
             document.getElementById('coordReadout').textContent = `Selected: ${formatted}`;
             updateActionButtons();
 
+            if (!notify) return;
             fetch('/update_location', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1003,6 +1076,7 @@
         async function disconnectDevice(skipBackend) {
             isPlayingRoute = false;
             clearTimeout(playbackTimer);
+            stopDriveQuiet();
             if (!skipBackend) {
                 fetch('/stop_tunnel', {
                     method: 'POST',
@@ -1058,6 +1132,7 @@
         async function stopLocation() {
             isPlayingRoute = false;
             clearTimeout(playbackTimer);
+            stopDriveQuiet();
             try {
                 const resp = await fetch('/stop_location', {
                     method: 'POST',
@@ -1231,6 +1306,280 @@
             }
         }
 
+        // ------------------ Speed-limit drive ------------------
+        // Planning is server-side. Playback ticks arrive on Socket.IO and the
+        // server pushes each fix through /set_location, same as a manual pin.
+
+        function formatDriveClock(seconds) {
+            const s = Math.max(0, Math.round(Number(seconds) || 0));
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const r = s % 60;
+            if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+            return `${m}:${String(r).padStart(2, '0')}`;
+        }
+
+        function onDriveOffset(val) {
+            driveOffset = Number(val);
+            const sign = driveOffset > 0 ? '+' : '';
+            document.getElementById('driveOffsetReadout').textContent = `${sign}${driveOffset}%`;
+        }
+
+        function setDriveProvider(provider, btn) {
+            if (provider === 'google' && !(localStorage.getItem('geoport_google_maps_key') || '').trim()) {
+                promptGoogleKey();
+                if (!(localStorage.getItem('geoport_google_maps_key') || '').trim()) return;
+            }
+            driveProvider = provider;
+            document.querySelectorAll('#driveProviders .chip').forEach(c => c.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+        }
+
+        function promptGoogleKey() {
+            const existing = localStorage.getItem('geoport_google_maps_key') || '';
+            const val = window.prompt(
+                'Optional Google Directions API key.\n\nIt only chooses the roads. Posted speed limits still come from OpenStreetMap. The key stays in this browser and is never written to the server.\n\nLeave blank to clear.',
+                existing
+            );
+            if (val === null) return;
+            const cleaned = val.trim();
+            if (cleaned) {
+                localStorage.setItem('geoport_google_maps_key', cleaned);
+                showToast('Google key saved in this browser');
+            } else {
+                localStorage.removeItem('geoport_google_maps_key');
+                if (driveProvider === 'google') setDriveProvider('osrm', document.querySelector('#driveProviders .chip'));
+                showToast('Cleared Google key');
+            }
+        }
+
+        function setDrivePick(which) {
+            if (!which || drivePickTarget === which) drivePickTarget = null;
+            else {
+                drivePickTarget = which;
+                isDrawingRoute = false;
+                const drawLabel = document.getElementById('drawRouteLabel');
+                const drawBtn = document.getElementById('drawRouteBtn');
+                if (drawLabel) drawLabel.textContent = 'Draw Route';
+                if (drawBtn) drawBtn.classList.remove('btn-primary');
+                showToast(which === 'start' ? 'Click the map to set the start' : 'Click the map to set the destination');
+            }
+            const startBtn = document.getElementById('drivePickStartBtn');
+            const endBtn = document.getElementById('drivePickEndBtn');
+            if (startBtn) startBtn.classList.toggle('btn-primary', drivePickTarget === 'start');
+            if (endBtn) endBtn.classList.toggle('btn-primary', drivePickTarget === 'end');
+            if (map) map.getContainer().style.cursor = (drivePickTarget || isDrawingRoute) ? 'crosshair' : '';
+        }
+
+        function upsertDriveMarker(existing, point, color) {
+            if (!driveLayerGroup) driveLayerGroup = L.layerGroup().addTo(map);
+            if (existing) {
+                existing.setLatLng([point.lat, point.lng]);
+                return existing;
+            }
+            return L.circleMarker([point.lat, point.lng], {
+                radius: 7, color, weight: 2, fillColor: color, fillOpacity: 0.95
+            }).addTo(driveLayerGroup);
+        }
+
+        function setDrivePoint(which, lat, lng, label) {
+            const point = { lat: Number(lat), lng: Number(lng) };
+            const text = label || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+            if (which === 'start') {
+                driveStart = point;
+                document.getElementById('driveStartInput').value = text;
+                driveStartMarker = upsertDriveMarker(driveStartMarker, point, '#10b981');
+            } else {
+                driveEnd = point;
+                document.getElementById('driveEndInput').value = text;
+                driveEndMarker = upsertDriveMarker(driveEndMarker, point, '#ef4444');
+            }
+            setDrivePick(null);
+            if (driveStart && driveEnd) {
+                map.fitBounds(L.latLngBounds([
+                    [driveStart.lat, driveStart.lng],
+                    [driveEnd.lat, driveEnd.lng]
+                ]).pad(0.4));
+            } else {
+                map.setView([point.lat, point.lng], Math.max(map.getZoom(), 16));
+            }
+        }
+
+        function useCurrentAsDriveStart() {
+            if (!selectedCoords) {
+                showToast('Drop a pin, or connect and simulate a location first.');
+                return;
+            }
+            setDrivePoint('start', selectedCoords.lat, selectedCoords.lng, 'Current pin');
+        }
+
+        async function searchDriveEndpoint(which) {
+            const input = document.getElementById(which === 'start' ? 'driveStartInput' : 'driveEndInput');
+            const box = document.getElementById(which === 'start' ? 'driveStartResults' : 'driveEndResults');
+            const q = input.value.trim();
+            box.style.display = 'none';
+            if (!q) return;
+            const coordMatch = q.match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/);
+            if (coordMatch) {
+                setDrivePoint(which, parseFloat(coordMatch[1]), parseFloat(coordMatch[2]), q);
+                return;
+            }
+            try {
+                const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`);
+                const items = await r.json();
+                if (!items.length) {
+                    showToast('No locations found');
+                    return;
+                }
+                const choose = (item) => {
+                    box.style.display = 'none';
+                    setDrivePoint(which, parseFloat(item.lat), parseFloat(item.lon), item.display_name);
+                };
+                if (items.length === 1) {
+                    choose(items[0]);
+                    return;
+                }
+                box.innerHTML = '';
+                items.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'search-item';
+                    div.textContent = item.display_name;
+                    div.onclick = () => choose(item);
+                    box.appendChild(div);
+                });
+                box.style.display = 'block';
+            } catch (e) {
+                showToast('Address search unavailable');
+            }
+        }
+
+        function drawDriveRoute(data) {
+            if (!driveLayerGroup) driveLayerGroup = L.layerGroup().addTo(map);
+            if (driveLine) driveLayerGroup.removeLayer(driveLine);
+            const latlngs = (data.geometry || []).map(p => [p[0], p[1]]);
+            if (latlngs.length < 2) return;
+            driveLine = L.polyline(latlngs, { color: '#f59e0b', weight: 5, opacity: 0.92 }).addTo(driveLayerGroup);
+            map.fitBounds(driveLine.getBounds(), { padding: [48, 48] });
+        }
+
+        function setDriveUi(state) {
+            const icon = document.getElementById('drivePlayIcon');
+            const label = document.getElementById('drivePlayLabel');
+            const status = document.getElementById('driveStatus');
+            if (!icon || !label || !status) return;
+            if (state === 'playing') {
+                driveUiState = 'playing';
+                icon.className = 'fa-solid fa-pause';
+                label.textContent = 'Pause';
+                status.textContent = 'Driving';
+            } else if (state === 'paused') {
+                driveUiState = 'paused';
+                icon.className = 'fa-solid fa-play';
+                label.textContent = 'Resume';
+                status.textContent = 'Paused';
+            } else if (state === 'finished') {
+                driveUiState = 'idle';
+                icon.className = 'fa-solid fa-play';
+                label.textContent = 'Start drive';
+                status.textContent = 'Arrived';
+                document.getElementById('driveProgress').style.width = '100%';
+            } else {
+                driveUiState = 'idle';
+                icon.className = 'fa-solid fa-play';
+                label.textContent = 'Start drive';
+                if (status.textContent === 'Driving' || status.textContent === 'Paused') {
+                    status.textContent = driveHasPlan ? 'Ready' : 'Idle';
+                }
+            }
+        }
+
+        async function stopDriveQuiet() {
+            setDriveUi('idle');
+            try { await fetch('/api/drive/stop', { method: 'POST' }); } catch (e) {}
+        }
+
+        async function planDrive() {
+            if (!driveStart || !driveEnd) {
+                showToast('Set a start and a destination.');
+                return;
+            }
+            const btn = document.getElementById('drivePlanBtn');
+            btn.disabled = true;
+            document.getElementById('driveStatus').textContent = 'Routing…';
+            try {
+                await stopDriveQuiet();
+                const resp = await fetch('/api/drive/route', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        start: driveStart,
+                        end: driveEnd,
+                        speed_offset_pct: driveOffset,
+                        provider: driveProvider,
+                        google_api_key: localStorage.getItem('geoport_google_maps_key') || ''
+                    })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.ok) {
+                    showToast(data.error || 'Could not plan a driving route');
+                    document.getElementById('driveStatus').textContent = 'Idle';
+                    return;
+                }
+                drawDriveRoute(data);
+                driveHasPlan = true;
+                document.getElementById('drivePlayBtn').disabled = false;
+                const km = (data.distance_m / 1000).toFixed(1);
+                document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(data.duration_s)} · ${data.speed_summary || ''}`;
+                document.getElementById('driveProgress').style.width = '0%';
+                document.getElementById('driveProgressText').textContent = 'Ready';
+                document.getElementById('driveEta').textContent = formatDriveClock(data.duration_s);
+                document.getElementById('driveStatus').textContent = 'Ready';
+                showToast(`Drive ready · ${km} km`);
+            } catch (e) {
+                document.getElementById('driveStatus').textContent = 'Idle';
+                showToast('Could not plan a driving route');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function drivePlayPause() {
+            if (!driveHasPlan && driveUiState !== 'paused') {
+                showToast('Plan a drive first.');
+                return;
+            }
+            if (driveUiState === 'playing') {
+                const resp = await fetch('/api/drive/pause', { method: 'POST' });
+                if (resp.ok) setDriveUi('paused');
+                return;
+            }
+            if (isPlayingRoute) {
+                isPlayingRoute = false;
+                clearTimeout(playbackTimer);
+                document.getElementById('playIcon').className = 'fa-solid fa-play';
+                document.getElementById('playLabel').textContent = 'Resume Route';
+                document.getElementById('playbackStateText').textContent = 'Paused';
+            }
+            const path = driveUiState === 'paused' ? '/api/drive/resume' : '/api/drive/start';
+            const resp = await fetch(path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ speed_offset_pct: driveOffset })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                showToast(data.error || 'Could not start the drive');
+                return;
+            }
+            setDriveUi(data.state || 'playing');
+        }
+
+        async function driveStop() {
+            await stopDriveQuiet();
+            document.getElementById('driveProgressText').textContent = driveHasPlan ? 'Stopped' : 'Not planned';
+            showToast('Drive stopped');
+        }
+
         // ------------------ Routes & GPX Playback ------------------
 
         function setSpeed(kmh, btnEl) {
@@ -1249,6 +1598,7 @@
 
         function toggleDrawRoute() {
             isDrawingRoute = !isDrawingRoute;
+            if (isDrawingRoute) setDrivePick(null);
             const btn = document.getElementById('drawRouteBtn');
             document.getElementById('drawRouteLabel').textContent = isDrawingRoute ? 'Finish Drawing' : 'Draw Route';
             btn.classList.toggle('btn-primary', isDrawingRoute);
@@ -1370,6 +1720,7 @@
                 showToast('Draw a route or import a GPX file first.');
                 return;
             }
+            if (!isPlayingRoute) stopDriveQuiet();
             isPlayingRoute = !isPlayingRoute;
             document.getElementById('playIcon').className = isPlayingRoute ? 'fa-solid fa-pause' : 'fa-solid fa-play';
             document.getElementById('playLabel').textContent = isPlayingRoute ? 'Pause Route' : 'Resume Route';
@@ -1453,6 +1804,12 @@
             document.getElementById('searchInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
             });
+            document.getElementById('driveStartInput').addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); searchDriveEndpoint('start'); }
+            });
+            document.getElementById('driveEndInput').addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); searchDriveEndpoint('end'); }
+            });
 
             document.addEventListener('keydown', (ev) => {
                 const tag = (ev.target && ev.target.tagName || '').toUpperCase();
@@ -1475,6 +1832,29 @@
         });
         socket.on('tunnel_error', (d) => {
             showToast((d && d.message) || 'Tunnel error');
+        });
+        socket.on('drive_tick', (d) => {
+            if (!d) return;
+            placePin(d.lat, d.lng, false, false);
+            if (map && !map.getBounds().contains([d.lat, d.lng])) {
+                map.panTo([d.lat, d.lng]);
+            }
+            const pct = Math.round((d.progress || 0) * 100);
+            document.getElementById('driveProgress').style.width = `${pct}%`;
+            const limit = d.limit_kmh ? ` · limit ${Math.round(d.limit_kmh)}` : '';
+            const street = d.name ? ` · ${d.name}` : '';
+            document.getElementById('driveProgressText').textContent = `${Math.round(d.speed_kmh)} km/h${limit}${street}`;
+            document.getElementById('driveEta').textContent = `${formatDriveClock(d.t)} / ${formatDriveClock(d.duration_s)}`;
+            document.getElementById('driveStatus').textContent = d.finished ? 'Arrived' : `${Math.round(d.speed_kmh)} km/h`;
+            if (d.device) {
+                isSimulating = true;
+                updateActionButtons();
+            }
+            if (d.finished) setDriveUi('finished');
+        });
+        socket.on('drive_state', (d) => {
+            if (!d || !d.state) return;
+            setDriveUi(d.state);
         });
     </script>
 </body>

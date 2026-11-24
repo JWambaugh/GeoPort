@@ -1,1 +1,1 @@
-"""Application services: Fuel Mode API, GPX parser, GitHub updates, and user locale detection."""
+"""Application services: driving routes, Fuel Mode, GPX, and update metadata."""

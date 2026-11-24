@@ -19,6 +19,7 @@ from geoport.core.pair_records import export_pairing_bytes_async
 from geoport.core.session import DeveloperModeRequiredError, DeviceSessionManager
 from geoport.discovery.scanner import DeviceScanner
 from geoport.runtime import AsyncRuntime, get_runtime
+from geoport.services.drive import register_drive_routes
 from geoport.services.fuel import FuelService
 from geoport.services.gpx import GPXService
 from geoport.services.updates import MetadataService
@@ -82,6 +83,7 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         'scanner': dev_scanner,
         'fuel_svc': fuel,
         'meta_svc': meta}
+    register_drive_routes(app, rt, sess, emit_socket_event)
     last_selected_state = {
         'udid': manual_udid,
         'wifi_address': manual_wifihost}
@@ -376,6 +378,13 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         logger.warning('Exit requested via /exit — tearing down active session and stopping GeoPort')
 
         def _graceful_stop() -> None:
+            drive = app.extensions['geoport'].get('drive')
+            if drive is not None:
+                try:
+                    drive.stop()
+                    drive.close()
+                except Exception:
+                    pass
             try:
                 rt.run(sess.disconnect(clear_gps=True), timeout=5.0)
             except Exception:
