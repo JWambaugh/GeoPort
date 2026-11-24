@@ -19,6 +19,8 @@ from geoport.core.pair_records import export_pairing_bytes_async
 from geoport.core.session import DeveloperModeRequiredError, DeviceSessionManager
 from geoport.discovery.scanner import DeviceScanner
 from geoport.runtime import AsyncRuntime, get_runtime
+from datetime import datetime, timezone
+from geoport.services.autoconnect import AutoConnect, choose_device, should_reconnect
 from geoport.services.control import register_control_api
 from geoport.services.drive import register_drive_routes
 from geoport.services.fuel import FuelService
@@ -113,6 +115,96 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         playing=lambda: app.extensions['geoport']['drive'].player.state == 'playing',
         device=_device_info,
     )
+    autoconnect = AutoConnect()
+    app.extensions['geoport']['autoconnect'] = autoconnect
+    _connect_lock = threading.Lock()
+
+    def _emit_link() -> None:
+        payload = autoconnect.snapshot()
+        payload['connected'] = bool(sess.snapshot.connected)
+        emit_socket_event('device_link', payload)
+
+    def _reapply_fix() -> None:
+        current = position.current()
+        if current is None or not sess.snapshot.connected:
+            return
+        try:
+            rt.run(sess.set_location(lat=current[0], lng=current[1]), timeout=25.0)
+            logger.info('Re-applied simulated position after reconnect')
+        except Exception as exc:
+            logger.warning(f'Re-applying simulated position failed: {exc}')
+
+    def _connect_from_entry(entry: dict[str, Any]) -> Any:
+        udid = entry.get('Identifier') or entry.get('UniqueDeviceID')
+        raw_type = str(entry.get('ConnectionType') or 'Network')
+        conn_type = 'USB' if raw_type.upper() == 'USB' else 'Network'
+        endpoints = entry.get('wifiEndpoints') or []
+        if isinstance(endpoints, dict):
+            endpoints = [endpoints]
+        return rt.run(sess.connect(
+            udid=udid,
+            conn_type=conn_type,
+            ios_version=entry.get('ProductVersion'),
+            wifi_address=entry.get('wifiAddress'),
+            wifi_port=entry.get('wifiPort'),
+            wifi_endpoints=endpoints,
+        ), timeout=70.0)
+
+    def connect_now(force: bool = False) -> None:
+        if not _connect_lock.acquire(blocking=False):
+            return
+        try:
+            connected = bool(sess.snapshot.connected)
+            drive_state = app.extensions['geoport']['drive'].player.state
+            if not force and not should_reconnect(
+                connected=connected,
+                user_hold=autoconnect.user_hold,
+                has_position=position.current() is not None,
+                drive_state=drive_state,
+                has_last_udid=bool(autoconnect.last_udid),
+                startup=autoconnect._startup,
+            ):
+                return
+            if not force and not autoconnect.due(time.monotonic()):
+                return
+            if not connected:
+                autoconnect.note_disconnect(datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+                _emit_link()
+            try:
+                devices = rt.run(dev_scanner.discover_devices(
+                    active_session_udid=sess.snapshot.udid if connected else None,
+                ), timeout=25.0)
+            except Exception as exc:
+                autoconnect.note_failure(str(exc), time.monotonic())
+                _emit_link()
+                return
+            entry = choose_device(devices if isinstance(devices, dict) else {}, autoconnect.last_udid)
+            if entry is None:
+                autoconnect.note_failure('No paired device is visible', time.monotonic())
+                _emit_link()
+                return
+            try:
+                snapshot = _connect_from_entry(entry)
+            except Exception as exc:
+                logger.info(f'Auto-connect failed: {exc}')
+                autoconnect.note_failure(str(exc), time.monotonic())
+                _emit_link()
+                return
+            autoconnect.remember(snapshot.udid or entry.get('Identifier'), snapshot.device_name or entry.get('DeviceName'))
+            autoconnect.note_success()
+            _reapply_fix()
+            _emit_link()
+            emit_socket_event('tunnel_reconnected', {
+                'message': 'Device reconnected. Simulated location restored.',
+                'status': snapshot.to_dict(),
+            })
+        finally:
+            _connect_lock.release()
+
+    app.extensions['geoport']['connect_now'] = connect_now
+    if os.getenv('GEOPORT_AUTOCONNECT', '1').strip().lower() not in ('0', 'false', 'no', 'off'):
+        threading.Thread(target=lambda: connect_now(True), name='geoport-autoconnect-start', daemon=True).start()
+        autoconnect.start(lambda: connect_now(False), interval_s=4.0)
     last_selected_state = {
         'udid': manual_udid,
         'wifi_address': manual_wifihost}
@@ -157,7 +249,10 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
             'session': sess.snapshot.to_dict(),
             'position': reported,
             'accuracy_m': fix.get('accuracy_m') or 0,
-            'drive': app.extensions['geoport']['drive'].status()})
+            'drive': app.extensions['geoport']['drive'].status(),
+            'reconnecting': autoconnect.reconnecting,
+            'last_disconnect_at': autoconnect.last_disconnect_at,
+            'reconnect_attempts': autoconnect.reconnect_attempts})
 
     @app.route('/list_devices')
     def list_devices_route() -> Response:
@@ -219,6 +314,8 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
             last_selected_state['wifi_address'] = wifi_address
         try:
             snapshot = rt.run(sess.connect(udid=udid, conn_type=conn_type, ios_version=ios_version, wifi_address=wifi_address, wifi_port=wifi_port, wifi_endpoints=wifi_endpoints), timeout=65.0)
+            autoconnect.remember(snapshot.udid or udid, snapshot.device_name)
+            _emit_link()
             return jsonify({
                 'rsd_data': snapshot.rsd_data,
                 'message': f'Connected via {snapshot.transport}',
@@ -242,6 +339,8 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
     @app.route('/disconnect', methods=['POST'])
     def stop_tunnel_route() -> Response:
         logger.info('Stopping active device tunnel')
+        autoconnect.hold()
+        _emit_link()
         try:
             rt.run(sess.disconnect(clear_gps=True), timeout=20.0)
         except Exception as exc:
@@ -439,6 +538,12 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
             if tracked is not None:
                 try:
                     tracked.stop()
+                except Exception:
+                    pass
+            link = app.extensions['geoport'].get('autoconnect')
+            if link is not None:
+                try:
+                    link.stop()
                 except Exception:
                     pass
             try:

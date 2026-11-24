@@ -39,8 +39,9 @@ curl -sS "$GEOPORT_URL/api/v1/status"
 ```
 
 `connected`, `simulating`, `device` (udid, name), `position` (`lat`, `lng`,
-`source`, `updated_at`, or `null`), `accuracy_m`, and `drive` (state,
-progress, remaining seconds, speed).
+`source`, `updated_at`, or `null`), `accuracy_m`, `drive` (state, progress,
+remaining seconds, speed, stop counts), and the reconnect fields
+`reconnecting`, `last_disconnect_at`, and `reconnect_attempts`.
 
 ## teleport
 
@@ -83,10 +84,18 @@ curl -sS -H 'Content-Type: application/json' \
 
 ./scripts/geoportctl drive --to "South Bank, Brisbane" --offset 10 --accuracy 15
 ./scripts/geoportctl drive --to-lat -27.48 --to-lng 153.03 --from-lat -27.47 --from-lng 153.02 --no-start
+./scripts/geoportctl drive --to "South Bank, Brisbane" --no-stops
 ```
 
 `speed_offset_pct` is the same -40 to +40 (server clamp is wider) offset as
-the Drive card. `start: false` only plans.
+the Drive card. `start: false` only plans. `stops` defaults to true. Set
+`"stops": false` to skip stop signs and signals. The plan's `stops` object
+counts `stop_signs` and `signals`. `eta_s` adds the expected signal wait
+(45% of signals, mean 25 s). Playback uses the rolled waits, so a red light
+is a real stop of 5–45 s and a green light is only a slight slowdown.
+`stop_markers` are the points drawn on the map. If Overpass does not
+answer, the route is still returned and `stops.note` says the lookup was
+skipped.
 
 ```bash
 ./scripts/geoportctl pause
@@ -108,6 +117,21 @@ curl -sS -H 'Content-Type: application/json' -d '{"meters":25}' "$GEOPORT_URL/ap
 ```
 
 `0` clears the wander. The setting is stored with the simulated position.
+
+## connect
+
+GeoPort connects on its own to the last device that worked (saved in
+`~/.geoport/last_device.json`) or the only device it can see, preferring
+USB and falling back to Wi-Fi. If the tunnel drops while a fix is set or a
+drive is running, it retries with backoff and puts the current simulated
+position back on the phone. The drive clock keeps running during the gap.
+`POST /api/v1/connect` asks for that attempt immediately. Disconnect in the
+UI pauses auto-connect until the next connect.
+
+```bash
+curl -sS -X POST "$GEOPORT_URL/api/v1/connect"
+./scripts/geoportctl connect
+```
 
 ## devices and clear
 

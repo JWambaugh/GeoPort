@@ -15,7 +15,7 @@ from flask import jsonify, request
 from geoport.config import logger
 from geoport.core.models import Coordinate
 from geoport.services.accuracy import MAX_ACCURACY_M
-from geoport.services.drive import USER_AGENT, DriveRouteError, _google_key_from
+from geoport.services.drive import USER_AGENT, DriveRouteError, _google_key_from, _stops_enabled, _stops_seed
 
 _LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
 
@@ -141,6 +141,12 @@ def register_control_api(
         snap = session.snapshot
         fix = position.snapshot()
         drive_status = drive.status()
+        link = app.extensions['geoport'].get('autoconnect')
+        link_state = link.snapshot() if link is not None else {
+            'reconnecting': False,
+            'last_disconnect_at': None,
+            'reconnect_attempts': 0,
+        }
         position_block = None
         if fix.get('lat') is not None:
             position_block = {
@@ -162,6 +168,9 @@ def register_control_api(
             'accuracy_m': fix.get('accuracy_m') or 0,
             'accuracy_max_m': MAX_ACCURACY_M,
             'drive': drive_status,
+            'reconnecting': link_state.get('reconnecting', False),
+            'last_disconnect_at': link_state.get('last_disconnect_at'),
+            'reconnect_attempts': link_state.get('reconnect_attempts', 0),
         }
 
     def deny() -> Any:
@@ -239,6 +248,8 @@ def register_control_api(
                 offset_pct=offset,
                 provider=str(payload.get('provider') or 'osrm'),
                 google_api_key=_google_key_from(payload),
+                include_stops=_stops_enabled(payload),
+                stops_seed=_stops_seed(payload),
             )
             public = plan.to_public_dict()
             public['start'] = {'lat': start[0], 'lng': start[1]}
@@ -321,6 +332,18 @@ def register_control_api(
             return jsonify({'ok': False, 'error': str(exc)}), exc.status
         except (TypeError, ValueError) as exc:
             return jsonify({'ok': False, 'error': str(exc)}), 400
+
+    @app.route('/api/v1/connect', methods=['POST'])
+    def automation_connect() -> Any:
+        connect_now = app.extensions['geoport'].get('connect_now')
+        if connect_now is None:
+            return jsonify({'ok': False, 'error': 'Auto-connect is not running'}), 503
+        try:
+            connect_now(True)
+        except Exception as exc:
+            logger.warning(f'/api/v1/connect failed: {exc}')
+            return jsonify({'ok': False, 'error': str(exc), **{k: status_payload().get(k) for k in ('reconnecting', 'reconnect_attempts', 'last_disconnect_at')}}), 502
+        return jsonify(status_payload())
 
     @app.route('/api/v1/devices', methods=['GET'])
     def automation_devices() -> Any:

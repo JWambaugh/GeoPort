@@ -70,6 +70,7 @@ def _run_self_test() -> None:
         importlib.import_module('apple_compress')
         importlib.metadata.version('apple_compress')
     runtime = get_runtime()
+    os.environ['GEOPORT_AUTOCONNECT'] = '0'
     try:
         app, _socketio = create_app(runtime=runtime)
         with app.test_client() as client:

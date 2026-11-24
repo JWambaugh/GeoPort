@@ -53,7 +53,7 @@ case "$cmd" in
     echo
     ;;
   drive)
-    lat="" lng="" address="" fromlat="" fromlng="" offset="0" accuracy="" start="true"
+    lat="" lng="" address="" fromlat="" fromlng="" offset="0" accuracy="" start="true" stops="true"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --to) address="$2"; shift 2 ;;
@@ -64,6 +64,7 @@ case "$cmd" in
         --offset) offset="$2"; shift 2 ;;
         --accuracy) accuracy="$2"; shift 2 ;;
         --no-start) start="false"; shift ;;
+        --no-stops) stops="false"; shift ;;
         *) die "unknown drive option: $1" ;;
       esac
     done
@@ -82,7 +83,11 @@ case "$cmd" in
     fi
     acc="null"
     if [[ -n "$accuracy" ]]; then acc="$accuracy"; fi
-    json_post /api/v1/drive "$(printf '{"to":%s,"from":%s,"speed_offset_pct":%s,"accuracy_m":%s,"start":%s}' "$to" "$from" "$offset" "$acc" "$start")"
+    json_post /api/v1/drive "$(printf '{"to":%s,"from":%s,"speed_offset_pct":%s,"accuracy_m":%s,"start":%s,"stops":%s}' "$to" "$from" "$offset" "$acc" "$start" "$stops")"
+    echo
+    ;;
+  connect)
+    json_post /api/v1/connect '{}'
     echo
     ;;
   start|pause|resume|stop)
@@ -115,8 +120,9 @@ geoportctl — local GeoPort automation (curl to localhost)
   geoportctl geocode "Queen Street, Brisbane"
   geoportctl teleport --lat -27.47 --lng 153.026
   geoportctl teleport --address "Brisbane CBD"
-  geoportctl drive --to "South Bank, Brisbane" [--offset 10] [--accuracy 20] [--no-start]
+  geoportctl drive --to "South Bank, Brisbane" [--offset 10] [--accuracy 20] [--no-start] [--no-stops]
   geoportctl drive --to-lat -27.48 --to-lng 153.03 [--from-lat LAT --from-lng LNG]
+  geoportctl connect
   geoportctl start | pause | resume | stop
   geoportctl accuracy [meters]
   geoportctl devices

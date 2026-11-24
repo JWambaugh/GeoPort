@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 import sys
 import time
 import unittest
@@ -340,6 +341,7 @@ class HttpPlanningTests(unittest.TestCase):
         self.assertIn('posted limit', plan.to_public_dict()['speed_summary'])
 
     def test_flask_simulate_and_start(self) -> None:
+        os.environ['GEOPORT_AUTOCONNECT'] = '0'
         from geoport.runtime import get_runtime
         from geoport.web.app import create_app
 
@@ -378,6 +380,109 @@ class HttpPlanningTests(unittest.TestCase):
             if drive is not None:
                 drive.close()
             runtime.shutdown(timeout=2.0)
+
+
+class StopAndReconnectTests(unittest.TestCase):
+    def test_overpass_nodes_are_snapped_filtered_and_clustered(self) -> None:
+        from geoport.services.stops import _CACHE, fetch_route_controls, parse_control_elements, snap_controls
+        _CACHE.clear()
+        segments = _straight(50, 50, 1000, 1000)
+        on_route = _move(0, 0, north_m=400)
+        beside = _move(on_route[0], on_route[1], east_m=8)
+        far = _move(on_route[0], on_route[1], east_m=80)
+        signal_a = _move(0, 0, north_m=700)
+        signal_b = _move(0, 0, north_m=715)
+        backward = _move(0, 0, north_m=900)
+        payload = {'elements': [
+            {'type': 'node', 'id': 1, 'lat': beside[0], 'lon': beside[1], 'tags': {'highway': 'stop'}},
+            {'type': 'node', 'id': 2, 'lat': far[0], 'lon': far[1], 'tags': {'highway': 'traffic_signals'}},
+            {'type': 'node', 'id': 3, 'lat': signal_a[0], 'lon': signal_a[1], 'tags': {'highway': 'traffic_signals'}},
+            {'type': 'node', 'id': 4, 'lat': signal_b[0], 'lon': signal_b[1], 'tags': {'highway': 'traffic_signals'}},
+            {'type': 'node', 'id': 5, 'lat': backward[0], 'lon': backward[1], 'tags': {'highway': 'stop', 'direction': 'forward'}},
+            {'type': 'way', 'nodes': [5], 'geometry': [
+                {'lat': backward[0], 'lon': backward[1]},
+                {'lat': backward[0] - 0.01, 'lon': backward[1]},
+            ]},
+        ]}
+        nodes, bearings = parse_control_elements(payload)
+        snapped = snap_controls(nodes, segments, bearings)
+        kinds = [item['kind'] for item in snapped]
+        self.assertEqual(kinds.count('stop_sign'), 1)
+        self.assertEqual(kinds.count('signal'), 1)
+        self.assertNotIn('give_way', kinds)
+
+        class Boom:
+            def post(self, *args, **kwargs):
+                raise TimeoutError('overpass down')
+
+        found, note = fetch_route_controls(segments, Boom())
+        self.assertEqual(found, [])
+        self.assertIn('unavailable', note or '')
+
+        class FakeResponse:
+            def __init__(self, body):
+                self._body = body
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return self._body
+
+        calls = {'n': 0}
+
+        class FakeHttp:
+            def post(self, *args, **kwargs):
+                calls['n'] += 1
+                return FakeResponse(payload)
+
+        _CACHE.clear()
+        first, first_note = fetch_route_controls(segments, FakeHttp())
+        second, second_note = fetch_route_controls(segments, FakeHttp())
+        self.assertIsNone(first_note)
+        self.assertIsNone(second_note)
+        self.assertEqual(calls['n'], 1)
+        self.assertEqual(len(first), len(second))
+
+    def test_stop_sign_dwells_and_green_signal_does_not(self) -> None:
+        from geoport.services.stops import PlannedStop, eta_seconds
+        segments = _straight(72, 72, 2000, 2000)
+        plain = build_profile(segments, 0)
+        stop = PlannedStop(kind='stop_sign', distance_m=800, lat=0, lng=0, dwell_s=3.0)
+        red = PlannedStop(kind='signal', distance_m=1400, lat=0, lng=0, dwell_s=8.0, red=True)
+        summary = {'stop_signs': 1, 'signals': 1, 'realized_signal_s': 8.0, 'expected_signal_s': 11.25}
+        plan = build_profile(segments, 0, stops=[stop, red], stops_summary=summary)
+        self.assertGreater(plan.duration_s, plain.duration_s + 9)
+        self.assertAlmostEqual(plan.eta_s, plan.duration_s - 8.0 + 11.25, delta=0.2)
+        samples = list(iter_samples(plan, 0.25))
+        held = [sample for sample in samples if abs(sample.distance_m - 800) < 25 and sample.speed_kmh < 1.2]
+        self.assertGreater(len(held), 8)
+        self.assertGreater(held[-1].t - held[0].t, 2.0)
+        public = plan.to_public_dict()
+        self.assertEqual(public['stops']['stop_signs'], 1)
+        self.assertEqual(public['stops']['signals'], 1)
+        green = PlannedStop(kind='signal', distance_m=800, lat=0, lng=0, dwell_s=0.0, red=False, slow=True)
+        flowing = build_profile(segments, 0, stops=[green], stops_summary={'realized_signal_s': 0, 'expected_signal_s': 11.25})
+        near = [sample for sample in iter_samples(flowing, 0.25) if abs(sample.distance_m - 800) < 20]
+        self.assertTrue(near)
+        self.assertGreater(min(sample.speed_kmh for sample in near), 8)
+        del eta_seconds
+
+    def test_device_choice_prefers_usb_and_reconnect_rules(self) -> None:
+        from geoport.services.autoconnect import choose_device, should_reconnect
+        usb = {'Identifier': 'U1', 'ConnectionType': 'USB', 'ProductVersion': '18.0'}
+        wifi = {'Identifier': 'U1', 'ConnectionType': 'Network', 'wifiAddress': '10.0.0.8'}
+        chosen = choose_device({'U1': {'USB': [usb], 'Wifi': [wifi]}, 'U2': {'Wifi': [wifi]}}, 'U1')
+        self.assertEqual(chosen['ConnectionType'], 'USB')
+        wifi_only = choose_device({'U1': {'Wifi': [wifi]}}, 'U1')
+        self.assertEqual(wifi_only['ConnectionType'], 'Network')
+        self.assertIsNone(choose_device({'U1': {'Wifi': [wifi]}, 'U2': {'USB': [usb]}}, None))
+        only = choose_device({'U9': {'Wifi': [wifi]}}, None)
+        self.assertEqual(only['Identifier'], 'U1')
+        self.assertFalse(should_reconnect(connected=True, user_hold=False, has_position=True, drive_state='playing', has_last_udid=True, startup=False))
+        self.assertFalse(should_reconnect(connected=False, user_hold=True, has_position=True, drive_state='playing', has_last_udid=True, startup=True))
+        self.assertTrue(should_reconnect(connected=False, user_hold=False, has_position=True, drive_state='idle', has_last_udid=False, startup=False))
+        self.assertTrue(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='playing', has_last_udid=False, startup=False))
+        self.assertTrue(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='idle', has_last_udid=False, startup=True))
+        self.assertFalse(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='idle', has_last_udid=False, startup=False))
 
 
 if __name__ == '__main__':

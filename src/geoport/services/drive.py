@@ -30,7 +30,7 @@ import math
 import os
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
 import requests
@@ -189,16 +189,29 @@ class DrivePlan:
     provider: str
     speed_offset_pct: float
     geometry: list[list[float]]
+    stops: list[Any] = field(default_factory=list)
+    stops_summary: dict[str, Any] = field(default_factory=dict)
+    eta_s: float = 0.0
 
     def to_public_dict(self) -> dict[str, Any]:
+        summary = self.stops_summary or {
+            'stop_signs': 0,
+            'signals': 0,
+            'available': True,
+            'note': None,
+            'expected_signal_s': 0,
+        }
         return {
             'ok': True,
             'provider': self.provider,
             'speed_offset_pct': self.speed_offset_pct,
             'distance_m': round(self.distance_m, 1),
             'duration_s': round(self.duration_s, 1),
+            'eta_s': round(self.eta_s or self.duration_s, 1),
             'speed_sources': _source_distances(self.segments),
             'speed_summary': sources_label(self.segments),
+            'stops': summary,
+            'stop_markers': [stop.to_dict() for stop in self.stops if getattr(stop, 'kind', '') != 'give_way'],
             'geometry': [[round(lat, 6), round(lng, 6)] for lat, lng in self.geometry],
             'segments': [
                 {
@@ -889,6 +902,8 @@ def build_profile(
     segments: list[MicroEdge],
     offset_pct: float = 0.0,
     provider: str = 'osrm',
+    stops: Optional[list[Any]] = None,
+    stops_summary: Optional[dict[str, Any]] = None,
 ) -> DrivePlan:
     if not segments:
         raise DriveRouteError('Route has no segments')
@@ -901,6 +916,10 @@ def build_profile(
         item.d1 = distance + seg.length_m
         distance = item.d1
         copied.append(item)
+    route_stops = sorted(
+        [stop for stop in (stops or []) if 12.0 < float(stop.distance_m) < distance - 8.0],
+        key=lambda stop: float(stop.distance_m),
+    )
     cruises = [effective_limit_kmh(seg.limit_kmh or DEFAULT_SPEED_KMH, offset) / 3.6 for seg in copied]
     bearings = [
         bearing_deg(seg.lat1, seg.lng1, seg.lat2, seg.lng2)
@@ -910,32 +929,74 @@ def build_profile(
     v_entry = 0.0
     route_distance = 0.0
     clock = 0.0
+    pending = list(route_stops)
     for index, seg in enumerate(copied):
-        if index == len(copied) - 1:
-            v_exit = 0.0
-        else:
-            angle = turn_angle_deg(bearings[index], bearings[index + 1])
-            v_exit = corner_speed_mps(cruises[index], cruises[index + 1], angle)
-        knots, v_entry = _segment_knots(v_entry, cruises[index], v_exit, seg.length_m)
-        knots = _dedupe_knots(knots, seg.length_m)
-        seg_phases, _elapsed = _phases_from_knots(knots, route_distance, clock, index)
-        phases.extend(seg_phases)
-        if seg_phases:
-            clock = seg_phases[-1].t1
-        route_distance += seg.length_m
+        local = [stop for stop in pending if seg.d0 - 0.5 <= float(stop.distance_m) <= seg.d1 + 0.5]
+        pending = [stop for stop in pending if stop not in local]
+        bounds = [seg.d0]
+        for stop in local:
+            cut = min(seg.d1, max(seg.d0, float(stop.distance_m)))
+            if cut - bounds[-1] > 1.0:
+                bounds.append(cut)
+        if seg.d1 - bounds[-1] > 0.4:
+            bounds.append(seg.d1)
+        elif bounds[-1] != seg.d1:
+            bounds.append(seg.d1)
+        for piece, (left, right) in enumerate(zip(bounds, bounds[1:])):
+            length = right - left
+            if length <= 0.05:
+                continue
+            dwell = next((stop for stop in local if abs(float(stop.distance_m) - right) < 1.5), None)
+            last_piece = index == len(copied) - 1 and piece == len(bounds) - 2
+            if dwell is not None and (dwell.dwell_s > 0 or not dwell.slow):
+                v_exit = 0.0
+            elif dwell is not None and dwell.slow:
+                v_exit = max(4.0, cruises[index] * 0.6)
+            elif last_piece:
+                v_exit = 0.0
+            elif piece == len(bounds) - 2 and index < len(copied) - 1:
+                angle = turn_angle_deg(bearings[index], bearings[index + 1])
+                v_exit = corner_speed_mps(cruises[index], cruises[index + 1], angle)
+            else:
+                v_exit = cruises[index]
+            knots, v_entry = _segment_knots(v_entry, cruises[index], v_exit, length)
+            knots = _dedupe_knots(knots, length)
+            seg_phases, _elapsed = _phases_from_knots(knots, route_distance, clock, index)
+            phases.extend(seg_phases)
+            if seg_phases:
+                clock = seg_phases[-1].t1
+            route_distance += length
+            if dwell is not None and dwell.dwell_s > 0:
+                phases.append(Phase(
+                    t0=clock,
+                    t1=clock + float(dwell.dwell_s),
+                    d0=route_distance,
+                    d1=route_distance,
+                    v0=0.0,
+                    v1=0.0,
+                    segment_index=index,
+                ))
+                clock += float(dwell.dwell_s)
+                v_entry = 0.0
     if not phases:
         raise DriveRouteError('Could not build a speed profile for this route')
     geometry = [[copied[0].lat1, copied[0].lng1]]
     for seg in copied:
         geometry.append([seg.lat2, seg.lng2])
+    summary = dict(stops_summary or {})
+    playback = phases[-1].t1
+    from geoport.services.stops import eta_seconds
     return DrivePlan(
         segments=copied,
         phases=phases,
         distance_m=route_distance,
-        duration_s=phases[-1].t1,
+        duration_s=playback,
         provider=provider,
         speed_offset_pct=offset,
         geometry=geometry,
+        stops=list(route_stops),
+        stops_summary=summary,
+        eta_s=eta_seconds(playback, summary) if summary else playback,
     )
 
 
@@ -1207,6 +1268,58 @@ class DrivePlayer:
                 next_deadline = time.monotonic()
 
 
+def _controls_for(segments: list[MicroEdge], http: Any, include_stops: bool, stops_seed: Optional[int]) -> tuple[list[Any], dict[str, Any]]:
+    empty = {
+        'stop_signs': 0,
+        'signals': 0,
+        'available': not include_stops,
+        'note': None if include_stops else 'Stops disabled',
+        'expected_signal_s': 0,
+        'realized_signal_s': 0,
+    }
+    if not include_stops:
+        return [], empty
+    from geoport.services.stops import assign_dwells, fetch_route_controls, summarize_stops
+    import random
+    try:
+        snapped, note = fetch_route_controls(segments, http)
+    except Exception as exc:
+        logger.info(f'Stop lookup failed: {exc}')
+        empty['available'] = False
+        empty['note'] = 'Stop signs unavailable'
+        return [], empty
+    if note:
+        empty['available'] = False
+        empty['note'] = note
+        return [], empty
+    rng = random.Random(stops_seed) if stops_seed is not None else random.Random()
+    planned = assign_dwells(snapped, rng)
+    return planned, summarize_stops(planned, True, None)
+
+
+def _stops_enabled(body: dict[str, Any]) -> bool:
+    if 'stops' in body:
+        return _as_bool(body.get('stops'), default=True)
+    if 'include_stops' in body:
+        return _as_bool(body.get('include_stops'), default=True)
+    return True
+
+
+def _stops_seed(body: dict[str, Any]) -> Optional[int]:
+    raw = body.get('stops_seed')
+    if raw is None or raw == '':
+        return None
+    return int(raw)
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ('0', 'false', 'no', 'off')
+    return bool(value)
+
+
 class DriveService:
     """One active drive for the desktop app: plan, then play / pause / stop."""
 
@@ -1240,6 +1353,8 @@ class DriveService:
         offset_pct: float = 0.0,
         provider: str = 'osrm',
         google_api_key: str = '',
+        include_stops: bool = True,
+        stops_seed: Optional[int] = None,
     ) -> DrivePlan:
         Coordinate(latitude=start[0], longitude=start[1]).validate()
         Coordinate(latitude=end[0], longitude=end[1]).validate()
@@ -1247,7 +1362,8 @@ class DriveService:
             raise DriveRouteError('Start and destination are the same place')
         self.stop()
         segments, used = fetch_segments(start, end, provider, google_api_key, self._http)
-        plan = build_profile(segments, offset_pct, provider=used)
+        planned, summary = _controls_for(segments, self._http, include_stops, stops_seed)
+        plan = build_profile(segments, offset_pct, provider=used, stops=planned, stops_summary=summary)
         with self._lock:
             self._raw = segments
             self._plan = plan
@@ -1331,6 +1447,8 @@ class DriveService:
             'distance_m': round(plan.distance_m, 1) if plan else 0.0,
             'speed_summary': sources_label(plan.segments) if plan else '',
             'speed_kmh': self._last_speed_kmh,
+            'eta_s': round(plan.eta_s, 1) if plan else 0.0,
+            'stops': plan.stops_summary if plan else {'stop_signs': 0, 'signals': 0, 'available': True, 'note': None},
         }
 
 
@@ -1482,6 +1600,8 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
                 offset_pct=offset,
                 provider=provider,
                 google_api_key=_google_key_from(body),
+                include_stops=_stops_enabled(body),
+                stops_seed=_stops_seed(body),
             )
             return jsonify(plan.to_public_dict())
         except DriveRouteError as exc:

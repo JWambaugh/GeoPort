@@ -398,6 +398,7 @@
             <span style="color: var(--border-glass)">|</span>
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText" style="font-weight: 500;">Not Connected</span>
+            <span id="reconnectBadge" class="mono" style="display: none; color: var(--amber);">Reconnecting…</span>
         </div>
 
         <div class="glass-pill" style="gap: 6px;">
@@ -593,6 +594,11 @@
                         <button type="button" class="btn" id="drivePickEndBtn" onclick="setDrivePick('end')">Map destination</button>
                         <button type="button" class="btn btn-primary" id="drivePlanBtn" onclick="planDrive()">Plan drive</button>
                     </div>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
+                        <input type="checkbox" id="driveStopsToggle" checked onchange="onDriveStopsToggle(this.checked)">
+                        Stop at signs &amp; signals
+                    </label>
+                    <div id="driveStopsReadout" class="mono" style="font-size: 12px; color: var(--text-secondary);"></div>
                     <div class="card-header">
                         <span>Speed offset</span>
                         <span class="mono" id="driveOffsetReadout">0%</span>
@@ -740,6 +746,7 @@
 
         // Speed-limit drive. The server owns the clock and pushes /set_location.
         let driveLayerGroup = null;
+        let driveStopLayer = null;
         let driveLine = null;
         let driveStartMarker = null;
         let driveEndMarker = null;
@@ -945,6 +952,7 @@
             L.control.zoom({ position: 'topright' }).addTo(map);
             drawnLayerGroup.addTo(map);
             driveLayerGroup = L.layerGroup().addTo(map);
+            driveStopLayer = L.layerGroup().addTo(map);
 
             const savedTheme = localStorage.getItem('geoport_theme') || 'dark';
             document.documentElement.setAttribute('data-theme', savedTheme);
@@ -1135,10 +1143,12 @@
             }
         }
 
-        async function disconnectDevice(skipBackend) {
-            isPlayingRoute = false;
-            clearTimeout(playbackTimer);
-            stopDriveQuiet();
+        async function disconnectDevice(skipBackend, keepDrive) {
+            if (!keepDrive) {
+                isPlayingRoute = false;
+                clearTimeout(playbackTimer);
+                stopDriveQuiet();
+            }
             if (!skipBackend) {
                 fetch('/stop_tunnel', {
                     method: 'POST',
@@ -1596,6 +1606,40 @@
             }
         }
 
+        function onDriveStopsToggle(on) {
+            localStorage.setItem('geoport_drive_stops', on ? '1' : '0');
+        }
+
+        function driveStopsEnabled() {
+            const box = document.getElementById('driveStopsToggle');
+            if (box) return box.checked;
+            return localStorage.getItem('geoport_drive_stops') !== '0';
+        }
+
+        function formatStopSummary(data) {
+            const stops = data.stops || {};
+            const signs = Number(stops.stop_signs || 0);
+            const signals = Number(stops.signals || 0);
+            const bits = [];
+            if (signs || signals) bits.push(`${signs} stop sign${signs === 1 ? '' : 's'} · ${signals} signal${signals === 1 ? '' : 's'}`);
+            if (stops.note) bits.push(stops.note);
+            return bits.join(' · ');
+        }
+
+        function drawStopMarkers(markers) {
+            if (!driveStopLayer && map) driveStopLayer = L.layerGroup().addTo(map);
+            if (!driveStopLayer) return;
+            driveStopLayer.clearLayers();
+            (markers || []).forEach((marker) => {
+                const signal = marker.kind === 'signal';
+                const color = signal ? '#f59e0b' : '#ef4444';
+                const title = signal ? (marker.red ? 'Signal · stop' : 'Signal · through') : 'Stop sign';
+                L.circleMarker([marker.lat, marker.lng], {
+                    radius: 7, color: '#0f172a', weight: 2, fillColor: color, fillOpacity: 0.95
+                }).bindTooltip(title).addTo(driveStopLayer);
+            });
+        }
+
         function drawDriveRoute(data) {
             if (!driveLayerGroup) driveLayerGroup = L.layerGroup().addTo(map);
             if (driveLine) driveLayerGroup.removeLayer(driveLine);
@@ -1603,6 +1647,7 @@
             if (latlngs.length < 2) return;
             driveLine = L.polyline(latlngs, { color: '#f59e0b', weight: 5, opacity: 0.92 }).addTo(driveLayerGroup);
             map.fitBounds(driveLine.getBounds(), { padding: [48, 48] });
+            drawStopMarkers(data.stop_markers);
         }
 
         function setDriveUi(state) {
@@ -1659,6 +1704,7 @@
                         end: driveEnd,
                         speed_offset_pct: driveOffset,
                         provider: driveProvider,
+                        stops: driveStopsEnabled(),
                         google_api_key: localStorage.getItem('geoport_google_maps_key') || ''
                     })
                 });
@@ -1672,10 +1718,12 @@
                 driveHasPlan = true;
                 document.getElementById('drivePlayBtn').disabled = false;
                 const km = (data.distance_m / 1000).toFixed(1);
-                document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(data.duration_s)} · ${data.speed_summary || ''}`;
+                const stopLine = formatStopSummary(data);
+                document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(data.eta_s || data.duration_s)} · ${data.speed_summary || ''}`;
+                document.getElementById('driveStopsReadout').textContent = stopLine;
                 document.getElementById('driveProgress').style.width = '0%';
                 document.getElementById('driveProgressText').textContent = 'Ready';
-                document.getElementById('driveEta').textContent = formatDriveClock(data.duration_s);
+                document.getElementById('driveEta').textContent = formatDriveClock(data.eta_s || data.duration_s);
                 document.getElementById('driveStatus').textContent = 'Ready';
                 showToast(`Drive ready · ${km} km`);
             } catch (e) {
@@ -1930,6 +1978,7 @@
                     applyCurrentStart(null);
                 }
                 if (typeof data.accuracy_m === 'number') syncAccuracySliders(data.accuracy_m);
+                showReconnect(data);
             } catch (e) {}
         }
 
@@ -1962,6 +2011,8 @@
                 if (currentBtn) currentBtn.classList.remove('active');
             });
             setUiSize(localStorage.getItem('geoport_ui_size') || 'normal');
+            const stopsBox = document.getElementById('driveStopsToggle');
+            if (stopsBox) stopsBox.checked = localStorage.getItem('geoport_drive_stops') !== '0';
             document.getElementById('driveEndInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); searchDriveEndpoint('end'); }
             });
@@ -1977,9 +2028,26 @@
         });
 
         const socket = io();
+        function showReconnect(state) {
+            const badge = document.getElementById('reconnectBadge');
+            if (!badge) return;
+            if (state && state.reconnecting) {
+                badge.style.display = '';
+                const n = Number(state.reconnect_attempts || 0);
+                badge.textContent = n > 1 ? `Reconnecting (${n})` : 'Reconnecting…';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
         socket.on('connection_reset', (d) => {
-            disconnectDevice(true);
-            showToast((d && d.message) || 'Device tunnel disconnected');
+            disconnectDevice(true, true);
+            showReconnect({ reconnecting: true, reconnect_attempts: 1 });
+            showToast((d && d.message) || 'Device tunnel disconnected — reconnecting');
+        });
+        socket.on('device_link', (d) => {
+            showReconnect(d || {});
+            if (d && d.connected) hydrateStatus();
         });
         socket.on('tunnel_reconnected', (d) => {
             hydrateStatus();
@@ -2030,7 +2098,11 @@
             const playBtn = document.getElementById('drivePlayBtn');
             if (playBtn) playBtn.disabled = false;
             const km = (Number(d.distance_m) / 1000).toFixed(1);
-            document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(d.duration_s)} · ${d.speed_summary || ''}`;
+            document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(d.eta_s || d.duration_s)} · ${d.speed_summary || ''}`;
+            const stopLine = formatStopSummary(d);
+            const readout = document.getElementById('driveStopsReadout');
+            if (readout) readout.textContent = stopLine;
+            drawStopMarkers(d.stop_markers);
             document.getElementById('driveProgress').style.width = '0%';
             document.getElementById('driveProgressText').textContent = d.started ? 'Driving' : 'Ready';
             document.getElementById('driveEta').textContent = formatDriveClock(d.duration_s);

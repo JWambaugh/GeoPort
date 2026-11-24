@@ -143,7 +143,9 @@ class AutomationApiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._tmp = tempfile.TemporaryDirectory()
         cls._previous_state = os.environ.get('GEOPORT_STATE_DIR')
+        cls._previous_auto = os.environ.get('GEOPORT_AUTOCONNECT')
         os.environ['GEOPORT_STATE_DIR'] = cls._tmp.name
+        os.environ['GEOPORT_AUTOCONNECT'] = '0'
         from geoport.runtime import get_runtime
         from geoport.web.app import create_app
         cls.runtime = get_runtime()
@@ -163,6 +165,10 @@ class AutomationApiTests(unittest.TestCase):
             os.environ.pop('GEOPORT_STATE_DIR', None)
         else:
             os.environ['GEOPORT_STATE_DIR'] = cls._previous_state
+        if cls._previous_auto is None:
+            os.environ.pop('GEOPORT_AUTOCONNECT', None)
+        else:
+            os.environ['GEOPORT_AUTOCONNECT'] = cls._previous_auto
         cls._tmp.cleanup()
 
     def test_teleport_status_accuracy_and_clear(self) -> None:
@@ -191,6 +197,7 @@ class AutomationApiTests(unittest.TestCase):
         import geoport.services.drive as drive_mod
         calls = []
         original = drive_mod.fetch_segments
+        original_controls = drive_mod._controls_for
 
         def fake(start, end, provider, google_api_key, http):
             calls.append((start, end))
@@ -201,7 +208,14 @@ class AutomationApiTests(unittest.TestCase):
             )
             return segments, 'osrm'
 
+        def no_stops(segments, http, include_stops, stops_seed):
+            return [], {
+                'stop_signs': 0, 'signals': 0, 'available': True, 'note': None,
+                'expected_signal_s': 0, 'realized_signal_s': 0,
+            }
+
         drive_mod.fetch_segments = fake
+        drive_mod._controls_for = no_stops
         try:
             self.client.post('/api/accuracy', json={'meters': 0})
             first = self.client.post('/api/v1/teleport', json={'lat': -27.5, 'lng': 153.0})
@@ -225,6 +239,20 @@ class AutomationApiTests(unittest.TestCase):
             self.assertNotAlmostEqual(calls[-1][0][0], -27.5, places=3)
         finally:
             drive_mod.fetch_segments = original
+            drive_mod._controls_for = original_controls
+
+    def test_connect_endpoint_runs_the_watchdog_hook(self) -> None:
+        called = []
+        previous = self.app.extensions['geoport'].get('connect_now')
+        self.app.extensions['geoport']['connect_now'] = lambda force=False: called.append(force)
+        try:
+            response = self.client.post('/api/v1/connect')
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(called, [True])
+            self.assertIn('reconnecting', response.get_json())
+            self.assertIn('reconnect_attempts', response.get_json())
+        finally:
+            self.app.extensions['geoport']['connect_now'] = previous
 
     def test_devices_route_uses_the_scanner(self) -> None:
         scanner = self.app.extensions['geoport']['scanner']
