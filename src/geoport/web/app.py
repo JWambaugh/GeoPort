@@ -19,8 +19,10 @@ from geoport.core.pair_records import export_pairing_bytes_async
 from geoport.core.session import DeveloperModeRequiredError, DeviceSessionManager
 from geoport.discovery.scanner import DeviceScanner
 from geoport.runtime import AsyncRuntime, get_runtime
+from geoport.services.control import register_control_api
 from geoport.services.drive import register_drive_routes
 from geoport.services.fuel import FuelService
+from geoport.services.position import PositionService
 from geoport.services.gpx import GPXService
 from geoport.services.updates import MetadataService
 _TILE_PROVIDERS: dict[str, tuple[str, str]] = {
@@ -77,13 +79,40 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
 
     sess = session_mgr or DeviceSessionManager(socket_emitter=emit_socket_event)
     dev_scanner = scanner or DeviceScanner(locale_provider=meta.get_user_country, manual_wifihost=manual_wifihost, manual_udid=manual_udid)
+    position = PositionService()
+
+    def _device_info() -> Optional[dict[str, Any]]:
+        snap = sess.snapshot
+        if not snap.connected:
+            return None
+        return {'udid': snap.udid, 'name': snap.device_name}
+
     app.extensions['geoport'] = {
         'runtime': rt,
         'session_mgr': sess,
         'scanner': dev_scanner,
         'fuel_svc': fuel,
-        'meta_svc': meta}
+        'meta_svc': meta,
+        'position': position}
     register_drive_routes(app, rt, sess, emit_socket_event)
+    register_control_api(app, rt, sess, dev_scanner, position, app.extensions['geoport']['drive'], emit_socket_event)
+
+    def _on_fix(fix: dict[str, Any]) -> None:
+        emit_socket_event('position', fix)
+        if fix.get('source') != 'accuracy':
+            return
+        if fix.get('lat') is None or not sess.snapshot.connected or not sess.snapshot.simulating:
+            return
+        try:
+            rt.submit(sess.set_location(lat=fix['lat'], lng=fix['lng']))
+        except Exception as exc:
+            logger.debug(f'Accuracy wander did not reach the device: {exc}')
+
+    position.set_on_fix(_on_fix)
+    position.start_wander(
+        playing=lambda: app.extensions['geoport']['drive'].player.state == 'playing',
+        device=_device_info,
+    )
     last_selected_state = {
         'udid': manual_udid,
         'wifi_address': manual_wifihost}
@@ -111,12 +140,24 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
 
     @app.route('/api/status')
     def api_status() -> Response:
+        fix = position.snapshot()
+        reported = None
+        if fix.get('lat') is not None:
+            reported = {
+                'lat': fix['lat'],
+                'lng': fix['lng'],
+                'source': fix.get('source'),
+                'updated_at': fix.get('updated_at'),
+            }
         return jsonify({
             'version': APP_VERSION_NUMBER,
             'version_type': APP_VERSION_TYPE,
             'platform': PLATFORM_NAME,
             'rootless_userspace_rsd': True,
-            'session': sess.snapshot.to_dict()})
+            'session': sess.snapshot.to_dict(),
+            'position': reported,
+            'accuracy_m': fix.get('accuracy_m') or 0,
+            'drive': app.extensions['geoport']['drive'].status()})
 
     @app.route('/list_devices')
     def list_devices_route() -> Response:
@@ -244,7 +285,10 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         try:
             lat = float(data['lat'])
             lng = float(data['lng'])
-            sess.update_target_coordinate(lat, lng)
+            fix = position.note(lat, lng, source='pin', device=_device_info())
+            sess.update_target_coordinate(fix['lat'], fix['lng'])
+            if sess.snapshot.simulating and sess.snapshot.connected:
+                rt.run(sess.set_location(lat=fix['lat'], lng=fix['lng']), timeout=25.0)
             return 'Location updated successfully'
         except (KeyError, TypeError, ValueError) as exc:
             return (jsonify({
@@ -258,6 +302,12 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         try:
             lat = float(lat_raw) if lat_raw is not None else None
             lng = float(lng_raw) if lng_raw is not None else None
+            if lat is None or lng is None:
+                if position.true_lat is not None and position.true_lng is not None:
+                    lat, lng = position.true_lat, position.true_lng
+            if lat is not None and lng is not None:
+                fix = position.note(lat, lng, source='set', device=_device_info())
+                lat, lng = fix['lat'], fix['lng']
             rt.run(sess.set_location(lat=lat, lng=lng), timeout=25.0)
             return 'Location set successfully'
         except ValueError as exc:
@@ -379,10 +429,16 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
 
         def _graceful_stop() -> None:
             drive = app.extensions['geoport'].get('drive')
+            tracked = app.extensions['geoport'].get('position')
             if drive is not None:
                 try:
                     drive.stop()
                     drive.close()
+                except Exception:
+                    pass
+            if tracked is not None:
+                try:
+                    tracked.stop()
                 except Exception:
                     pass
             try:

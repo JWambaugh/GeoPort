@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
     <title>GeoPort v{{ app_version_num }} — Spatial Location Studio</title>
+    <script>
+        (function () {
+            var size = localStorage.getItem('geoport_ui_size') || 'normal';
+            if (size !== 'small' && size !== 'large') size = 'normal';
+            document.documentElement.setAttribute('data-ui-size', size);
+        })();
+    </script>
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -49,6 +56,15 @@
             --danger: #dc2626;
             --amber: #d97706;
             --shadow: 0 18px 42px rgba(15, 23, 42, 0.15);
+        }
+
+        :root { --ui-scale: 1.25; }
+        html[data-ui-size="small"] { --ui-scale: 1; }
+        html[data-ui-size="normal"] { --ui-scale: 1.25; }
+        html[data-ui-size="large"] { --ui-scale: 1.4; }
+        @media (max-width: 1200px) {
+            html[data-ui-size="large"] { --ui-scale: 1.18; }
+            html[data-ui-size="normal"] { --ui-scale: 1.12; }
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -109,6 +125,29 @@
             50% { transform: scale(1.3); opacity: 0.7; }
         }
         .mono { font-family: 'JetBrains Mono', monospace; }
+
+        .command-deck, .top-bar, .right-dock, .toast-stack, .modal-box {
+            zoom: var(--ui-scale);
+        }
+        .current-loc-btn {
+            width: 100%;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-strong);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            font-weight: 700; font-size: 13.5px;
+            padding: 10px 14px;
+            cursor: pointer;
+        }
+        .current-loc-btn.active {
+            background: var(--accent-glow);
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        .ui-size-select {
+            width: auto; border-radius: 999px; padding: 4px 8px; font-size: 12px; font-weight: 600;
+        }
 
         .icon-btn {
             background: transparent; border: 1px solid var(--border-glass);
@@ -281,8 +320,10 @@
         .dpad button:active, .dpad button:hover { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
         .dpad .center-dot {
             display: flex; align-items: center; justify-content: center;
-            color: var(--text-muted); font-size: 11px;
+            color: var(--text-muted); font-size: 13px;
+            background: transparent; border: none; cursor: pointer;
         }
+        .dpad .center-dot:hover { color: var(--accent); }
 
         /* Dropzone */
         .dropzone {
@@ -363,6 +404,11 @@
             {% if version_message %}
             <span class="version-chip" title="{{ version_message }}">{{ version_message }}</span>
             {% endif %}
+            <select id="uiSizeSelect" class="ui-size-select" aria-label="UI size" onchange="setUiSize(this.value)" title="Interface size">
+                <option value="small">Small</option>
+                <option value="normal">Normal</option>
+                <option value="large">Large</option>
+            </select>
             <a class="icon-btn" href="/?ui=classic" title="Switch to Classic GeoPort Layout">
                 <i class="fa-solid fa-sliders"></i> Classic UI
             </a>
@@ -454,6 +500,14 @@
                             <i class="fa-solid fa-stop"></i> Stop GPS
                         </button>
                     </div>
+                    <div class="card-header">
+                        <span>GPS accuracy</span>
+                        <span class="mono" id="accuracyReadout">Exact</span>
+                    </div>
+                    <input type="range" id="accuracySlider" min="0" max="100" value="0" step="1" oninput="onAccuracySlider(this.value)" style="accent-color: var(--accent);" aria-label="GPS accuracy in meters">
+                    <div style="font-size: 11.5px; color: var(--text-secondary); line-height: 1.4;">
+                        0 is exact. Higher values wander smoothly around the fix, including while you hold still.
+                    </div>
                 </div>
 
                 <div class="card">
@@ -517,13 +571,18 @@
                         <button type="button" class="chip" onclick="setDriveProvider('google', this)">Google</button>
                     </div>
                     <div style="font-size: 11.5px; color: var(--text-secondary);">Start</div>
+                    <button type="button" class="current-loc-btn" id="driveCurrentBtn" onclick="useCurrentLocation()">
+                        <i class="fa-solid fa-location-crosshairs"></i> Current location
+                    </button>
                     <div class="search-wrap">
-                        <input type="text" id="driveStartInput" placeholder="Address, place, or lat, lng" autocomplete="off">
+                        <input type="text" id="driveStartInput" placeholder="No simulated location yet — pick a start" autocomplete="off">
                         <div class="search-results" id="driveStartResults"></div>
                     </div>
                     <div class="btn-row">
                         <button type="button" class="btn" id="drivePickStartBtn" onclick="setDrivePick('start')">Map start</button>
-                        <button type="button" class="btn" onclick="useCurrentAsDriveStart()">Use current pin</button>
+                        <button type="button" class="btn" onclick="centerOnCurrentLocation()" title="Recenter the map on the simulated position">
+                            <i class="fa-solid fa-location-crosshairs"></i> Center
+                        </button>
                     </div>
                     <div style="font-size: 11.5px; color: var(--text-secondary);">Destination</div>
                     <div class="search-wrap">
@@ -641,7 +700,7 @@
             <button onclick="nudgeMarker(0.00012, 0)" aria-label="North"><i class="fa-solid fa-chevron-up"></i></button>
             <div></div>
             <button onclick="nudgeMarker(0, -0.00012)" aria-label="West"><i class="fa-solid fa-chevron-left"></i></button>
-            <div class="center-dot"><i class="fa-solid fa-compass"></i></div>
+            <button type="button" class="center-dot" onclick="centerOnCurrentLocation()" aria-label="Center on current location" title="Center on current location"><i class="fa-solid fa-location-crosshairs"></i></button>
             <button onclick="nudgeMarker(0, 0.00012)" aria-label="East"><i class="fa-solid fa-chevron-right"></i></button>
             <div></div>
             <button onclick="nudgeMarker(-0.00012, 0)" aria-label="South"><i class="fa-solid fa-chevron-down"></i></button>
@@ -691,6 +750,9 @@
         let driveOffset = 0;
         let driveUiState = 'idle';
         let driveHasPlan = false;
+        let driveFollowsCurrent = true;
+        let currentSimulated = null;
+        let accuracyMeters = 0;
 
         let mapLayersCatalog = [];
         let mapLayerDefaults = {};
@@ -1292,7 +1354,6 @@
                 document.getElementById('fuelPriceDisplay').textContent = `${d.price}¢`;
                 document.getElementById('fuelStatePostcode').textContent = `${d.state || ''} ${d.postcode || ''}`;
                 document.getElementById('fuelSuburbCoords').textContent = `${d.suburb} • (${Number(d.lat).toFixed(5)}, ${Number(d.lng).toFixed(5)})`;
-                placePin(Number(d.lat), Number(d.lng), true);
             } catch (e) {}
         }
 
@@ -1386,6 +1447,9 @@
             const point = { lat: Number(lat), lng: Number(lng) };
             const text = label || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
             if (which === 'start') {
+                driveFollowsCurrent = false;
+                const currentBtn = document.getElementById('driveCurrentBtn');
+                if (currentBtn) currentBtn.classList.remove('active');
                 driveStart = point;
                 document.getElementById('driveStartInput').value = text;
                 driveStartMarker = upsertDriveMarker(driveStartMarker, point, '#10b981');
@@ -1405,12 +1469,91 @@
             }
         }
 
-        function useCurrentAsDriveStart() {
-            if (!selectedCoords) {
-                showToast('Drop a pin, or connect and simulate a location first.');
+        function formatAccuracy(meters) {
+            const value = Math.round(Number(meters) || 0);
+            return value <= 0 ? 'Exact' : `${value} m`;
+        }
+
+        function syncAccuracySliders(meters) {
+            accuracyMeters = Math.max(0, Math.min(100, Math.round(Number(meters) || 0)));
+            const label = formatAccuracy(accuracyMeters);
+            const readout = document.getElementById('accuracyReadout');
+            if (readout) readout.textContent = label;
+            const slider = document.getElementById('accuracySlider');
+            if (slider && document.activeElement !== slider) slider.value = String(accuracyMeters);
+        }
+
+        function onAccuracySlider(val) {
+            syncAccuracySliders(val);
+            fetch('/api/accuracy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meters: accuracyMeters })
+            }).catch(() => showToast('Could not save GPS accuracy'));
+        }
+
+        function setUiSize(size) {
+            const chosen = size === 'small' || size === 'large' ? size : 'normal';
+            document.documentElement.setAttribute('data-ui-size', chosen);
+            localStorage.setItem('geoport_ui_size', chosen);
+            const select = document.getElementById('uiSizeSelect');
+            if (select) select.value = chosen;
+        }
+
+        function centerOnCurrentLocation() {
+            const pos = (currentSimulated && currentSimulated.lat != null) ? currentSimulated : selectedCoords;
+            if (!pos || pos.lat == null) {
+                showToast('No simulated location yet.');
                 return;
             }
-            setDrivePoint('start', selectedCoords.lat, selectedCoords.lng, 'Current pin');
+            map.setView([Number(pos.lat), Number(pos.lng)], Math.max(map.getZoom(), 16));
+        }
+
+        function applyCurrentStart(pos) {
+            const btn = document.getElementById('driveCurrentBtn');
+            const input = document.getElementById('driveStartInput');
+            if (!input) return;
+            if (!driveFollowsCurrent) {
+                if (btn) btn.classList.remove('active');
+                return;
+            }
+            if (!pos || pos.lat == null) {
+                driveStart = null;
+                if (document.activeElement !== input) input.value = '';
+                input.placeholder = 'No simulated location yet — pick a start';
+                if (btn) btn.classList.remove('active');
+                return;
+            }
+            driveStart = { lat: Number(pos.lat), lng: Number(pos.lng) };
+            if (document.activeElement !== input) {
+                input.value = `Current location · ${driveStart.lat.toFixed(5)}, ${driveStart.lng.toFixed(5)}`;
+            }
+            if (btn) btn.classList.add('active');
+            if (map) driveStartMarker = upsertDriveMarker(driveStartMarker, driveStart, '#10b981');
+        }
+
+        function useCurrentLocation() {
+            driveFollowsCurrent = true;
+            if (!currentSimulated || currentSimulated.lat == null) {
+                applyCurrentStart(null);
+                showToast('No simulated location yet. Simulate a position, or pick a start.');
+                return;
+            }
+            applyCurrentStart(currentSimulated);
+            centerOnCurrentLocation();
+        }
+
+        function rememberSimulated(pos) {
+            if (!pos || pos.lat == null || pos.cleared) {
+                currentSimulated = null;
+                applyCurrentStart(null);
+                return;
+            }
+            currentSimulated = { lat: Number(pos.lat), lng: Number(pos.lng), source: pos.source || null };
+            if (pos.pan) placePin(currentSimulated.lat, currentSimulated.lng, true, false);
+            else placePin(currentSimulated.lat, currentSimulated.lng, false, false);
+            if (typeof pos.accuracy_m === 'number') syncAccuracySliders(pos.accuracy_m);
+            applyCurrentStart(currentSimulated);
         }
 
         async function searchDriveEndpoint(which) {
@@ -1500,7 +1643,7 @@
 
         async function planDrive() {
             if (!driveStart || !driveEnd) {
-                showToast('Set a start and a destination.');
+                showToast(driveStart ? 'Set a destination.' : 'No simulated location yet — pick a start, or simulate a position.');
                 return;
             }
             const btn = document.getElementById('drivePlanBtn');
@@ -1777,10 +1920,16 @@
                     document.getElementById('disconnectBtn').style.display = 'inline-flex';
                     document.getElementById('transportBadge').textContent = s.userspace_tunnel ? 'Userspace RSD ✓' : 'Connected ✓';
                     if (s.current_coordinate) {
-                        placePin(s.current_coordinate.lat, s.current_coordinate.lng, true);
+                        placePin(s.current_coordinate.lat, s.current_coordinate.lng, true, false);
                     }
                     updateActionButtons();
                 }
+                if (data.position && data.position.lat != null) {
+                    rememberSimulated(Object.assign({ pan: !(s && s.current_coordinate) }, data.position));
+                } else if (!s || !s.current_coordinate) {
+                    applyCurrentStart(null);
+                }
+                if (typeof data.accuracy_m === 'number') syncAccuracySliders(data.accuracy_m);
             } catch (e) {}
         }
 
@@ -1807,6 +1956,12 @@
             document.getElementById('driveStartInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); searchDriveEndpoint('start'); }
             });
+            document.getElementById('driveStartInput').addEventListener('input', () => {
+                driveFollowsCurrent = false;
+                const currentBtn = document.getElementById('driveCurrentBtn');
+                if (currentBtn) currentBtn.classList.remove('active');
+            });
+            setUiSize(localStorage.getItem('geoport_ui_size') || 'normal');
             document.getElementById('driveEndInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); searchDriveEndpoint('end'); }
             });
@@ -1850,11 +2005,37 @@
                 isSimulating = true;
                 updateActionButtons();
             }
-            if (d.finished) setDriveUi('finished');
+            if (d.finished) {
+                driveFollowsCurrent = true;
+                setDriveUi('finished');
+                applyCurrentStart(currentSimulated);
+            }
         });
         socket.on('drive_state', (d) => {
             if (!d || !d.state) return;
+            if (d.follow_current) driveFollowsCurrent = true;
             setDriveUi(d.state);
+            if (d.follow_current) applyCurrentStart(currentSimulated);
+        });
+        socket.on('position', (d) => rememberSimulated(d));
+        socket.on('drive_plan', (d) => {
+            if (!d || !d.geometry) return;
+            document.querySelectorAll('.tab-btn').forEach((btn) => {
+                if ((btn.textContent || '').indexOf('Routes') !== -1) switchTab('routes', btn);
+            });
+            if (d.start) setDrivePoint('start', d.start.lat, d.start.lng);
+            if (d.end) setDrivePoint('end', d.end.lat, d.end.lng, d.end.label || null);
+            drawDriveRoute(d);
+            driveHasPlan = true;
+            const playBtn = document.getElementById('drivePlayBtn');
+            if (playBtn) playBtn.disabled = false;
+            const km = (Number(d.distance_m) / 1000).toFixed(1);
+            document.getElementById('driveSummary').textContent = `${km} km · ${formatDriveClock(d.duration_s)} · ${d.speed_summary || ''}`;
+            document.getElementById('driveProgress').style.width = '0%';
+            document.getElementById('driveProgressText').textContent = d.started ? 'Driving' : 'Ready';
+            document.getElementById('driveEta').textContent = formatDriveClock(d.duration_s);
+            if (d.started) setDriveUi('playing');
+            else document.getElementById('driveStatus').textContent = 'Ready';
         });
     </script>
 </body>

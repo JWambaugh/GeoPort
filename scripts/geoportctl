@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Talk to a GeoPort server on this machine. Stdlib curl only.
+#   GEOPORT_URL=http://127.0.0.1:54321 ./scripts/geoportctl status
+set -euo pipefail
+BASE="${GEOPORT_URL:-http://127.0.0.1:54321}"
+cmd="${1:-status}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+die() { echo "geoportctl: $*" >&2; exit 1; }
+
+json_post() {
+  local path="$1"
+  local data="$2"
+  curl -sS -H 'Content-Type: application/json' -d "$data" "${BASE}${path}"
+}
+
+need() {
+  local name="$1"
+  local value="${2:-}"
+  [[ -n "$value" ]] || die "missing $name"
+}
+
+case "$cmd" in
+  status)
+    curl -sS "${BASE}/api/v1/status"
+    echo
+    ;;
+  geocode)
+    q="${1:-}"
+    need "an address" "$q"
+    curl -sS -G "${BASE}/api/v1/geocode" --data-urlencode "q=${q}"
+    echo
+    ;;
+  teleport)
+    lat="" lng="" address=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --lat) lat="$2"; shift 2 ;;
+        --lng) lng="$2"; shift 2 ;;
+        --address) address="$2"; shift 2 ;;
+        *) die "unknown teleport option: $1" ;;
+      esac
+    done
+    if [[ -n "$address" ]]; then
+      json_post /api/v1/teleport "$(printf '{"address":"%s"}' "$address")"
+    else
+      need "--lat" "$lat"
+      need "--lng" "$lng"
+      json_post /api/v1/teleport "$(printf '{"lat":%s,"lng":%s}' "$lat" "$lng")"
+    fi
+    echo
+    ;;
+  drive)
+    lat="" lng="" address="" fromlat="" fromlng="" offset="0" accuracy="" start="true"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --to) address="$2"; shift 2 ;;
+        --to-lat) lat="$2"; shift 2 ;;
+        --to-lng) lng="$2"; shift 2 ;;
+        --from-lat) fromlat="$2"; shift 2 ;;
+        --from-lng) fromlng="$2"; shift 2 ;;
+        --offset) offset="$2"; shift 2 ;;
+        --accuracy) accuracy="$2"; shift 2 ;;
+        --no-start) start="false"; shift ;;
+        *) die "unknown drive option: $1" ;;
+      esac
+    done
+    if [[ -n "$address" ]]; then
+      to="$(printf '{"address":"%s"}' "$address")"
+    else
+      need "--to-lat or --to" "$lat"
+      need "--to-lng" "$lng"
+      to="$(printf '{"lat":%s,"lng":%s}' "$lat" "$lng")"
+    fi
+    from="null"
+    if [[ -n "$fromlat" || -n "$fromlng" ]]; then
+      need "--from-lat" "$fromlat"
+      need "--from-lng" "$fromlng"
+      from="$(printf '{"lat":%s,"lng":%s}' "$fromlat" "$fromlng")"
+    fi
+    acc="null"
+    if [[ -n "$accuracy" ]]; then acc="$accuracy"; fi
+    json_post /api/v1/drive "$(printf '{"to":%s,"from":%s,"speed_offset_pct":%s,"accuracy_m":%s,"start":%s}' "$to" "$from" "$offset" "$acc" "$start")"
+    echo
+    ;;
+  start|pause|resume|stop)
+    json_post "/api/v1/drive/${cmd}" '{}'
+    echo
+    ;;
+  accuracy)
+    if [[ $# -eq 0 ]]; then
+      curl -sS "${BASE}/api/v1/accuracy"
+    else
+      json_post /api/v1/accuracy "$(printf '{"meters":%s}' "$1")"
+    fi
+    echo
+    ;;
+  devices|list)
+    curl -sS "${BASE}/api/v1/devices"
+    echo
+    ;;
+  clear)
+    json_post /api/v1/clear '{}'
+    echo
+    ;;
+  help|-h|--help)
+    cat <<'EOF'
+geoportctl — local GeoPort automation (curl to localhost)
+
+  GEOPORT_URL   default http://127.0.0.1:54321
+
+  geoportctl status
+  geoportctl geocode "Queen Street, Brisbane"
+  geoportctl teleport --lat -27.47 --lng 153.026
+  geoportctl teleport --address "Brisbane CBD"
+  geoportctl drive --to "South Bank, Brisbane" [--offset 10] [--accuracy 20] [--no-start]
+  geoportctl drive --to-lat -27.48 --to-lng 153.03 [--from-lat LAT --from-lng LNG]
+  geoportctl start | pause | resume | stop
+  geoportctl accuracy [meters]
+  geoportctl devices
+  geoportctl clear
+EOF
+    ;;
+  *)
+    die "unknown command: $cmd (try geoportctl help)"
+    ;;
+esac

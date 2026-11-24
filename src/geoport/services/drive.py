@@ -1226,6 +1226,8 @@ class DriveService:
         self._plan: Optional[DrivePlan] = None
         self._provider = 'osrm'
         self._offset = 0.0
+        self._last_speed_kmh = None
+        self._user_stop = False
 
     @property
     def player(self) -> DrivePlayer:
@@ -1296,9 +1298,15 @@ class DriveService:
         self._player.resume()
         return self.status()
 
-    def stop(self) -> dict[str, Any]:
+    def stop(self, user: bool = False) -> dict[str, Any]:
+        self._user_stop = bool(user)
         self._player.stop()
         return self.status()
+
+    def consume_user_stop(self) -> bool:
+        flag = getattr(self, '_user_stop', False)
+        self._user_stop = False
+        return flag
 
     def close(self) -> None:
         self._player.close()
@@ -1322,6 +1330,7 @@ class DriveService:
             'has_plan': plan is not None,
             'distance_m': round(plan.distance_m, 1) if plan else 0.0,
             'speed_summary': sources_label(plan.segments) if plan else '',
+            'speed_kmh': self._last_speed_kmh,
         }
 
 
@@ -1406,21 +1415,35 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
 
         future.add_done_callback(_done)
 
+    def _device() -> Optional[dict[str, Any]]:
+        snap = session.snapshot
+        if not snap.connected:
+            return None
+        return {'udid': snap.udid, 'name': snap.device_name}
+
     def on_sample(sample: DriveSample) -> None:
+        service._last_speed_kmh = round(sample.speed_kmh, 1)
+        lat, lng = sample.lat, sample.lng
+        position = app.extensions['geoport'].get('position')
+        if position is not None:
+            fix = position.note(lat, lng, source='drive', device=_device())
+            lat, lng = fix['lat'], fix['lng']
         pushed = False
         try:
-            session.update_target_coordinate(sample.lat, sample.lng)
+            session.update_target_coordinate(lat, lng)
         except ValueError as exc:
             logger.debug(f'Drive coordinate rejected: {exc}')
         if session.snapshot.connected:
             with push_lock:
-                pending['lat'] = sample.lat
-                pending['lng'] = sample.lng
+                pending['lat'] = lat
+                pending['lng'] = lng
                 future = inflight['fut']
                 if future is None or future.done():
                     push_latest()
                     pushed = True
         payload = sample.to_dict()
+        payload['lat'] = lat
+        payload['lng'] = lng
         payload['state'] = 'finished' if sample.finished else 'playing'
         payload['device'] = pushed
         emit('drive_tick', payload)
@@ -1428,6 +1451,12 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
     def on_state(state: str) -> None:
         service_status = service.status()
         service_status['state'] = state
+        user_stop = state == 'idle' and service.consume_user_stop()
+        if state in ('finished', 'paused') or user_stop:
+            service_status['follow_current'] = True
+            position = app.extensions['geoport'].get('position')
+            if position is not None:
+                position.flush()
         emit('drive_state', service_status)
 
     service = DriveService(on_sample, on_state=on_state)
@@ -1488,7 +1517,7 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
 
     @app.route('/api/drive/stop', methods=['POST'])
     def drive_stop() -> Any:
-        return jsonify(service.stop())
+        return jsonify(service.stop(user=True))
 
     @app.route('/api/drive/status', methods=['GET'])
     def drive_status() -> Any:
