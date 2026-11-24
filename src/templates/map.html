@@ -3,23 +3,23 @@
 
 <head>
     <title>GeoPort</title>
-
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!--    <link rel="stylesheet" href="{{ url_for('static', filename='new-style.css') }}">-->
     <script src="https://cdn.jsdelivr.net/npm/babel-polyfill@latest/dist/polyfill.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/whatwg-fetch@3.6.2/dist/fetch.umd.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.10.2/dist/umd/popper.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet-providers@2.0.0/leaflet-providers.min.js"></script>
     <script src="https://unpkg.com/leaflet-geosearch@3.0.0/dist/geosearch.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
-    <!-- <script src="https://cdn.jsdelivr.net/npm/leaflet-geojson-export@2.1.1/dist/leaflet-geojson-export.min.js"></script> -->
     <script src='https://api.tiles.mapbox.com/mapbox.js/plugins/leaflet-omnivore/v0.3.1/leaflet-omnivore.min.js'></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet-filelayer@1.2.0/src/leaflet.filelayer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/leaflet-easybutton@2.4.0/src/easy-button.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.5.0/dist/socket.io.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
     <link href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" rel="stylesheet">
 
@@ -29,8 +29,22 @@
     <link href="https://cdn.lineicons.com/4.0/lineicons.css" rel="stylesheet" />
     <link href="https://cdn.jsdelivr.net/npm/leaflet-easybutton@2.4.0/src/easy-button.min.css" rel="stylesheet">
 
+</head>
+<style>
 
-    <style>
+    :root {
+    --background-gradient: linear-gradient(160deg, #1a2980, #1a8e8b);
+    --glass-background: rgba(255, 255, 255, 0.2);
+    --glass-border: rgba(255, 255, 255, 0.125);
+    --text-color: white;
+    --accent-color: #4ecdc4;
+}
+
+.leaflet-tile.geoport-dark-tiles {
+    filter: invert(100%) hue-rotate(180deg) brightness(94%) contrast(92%) saturate(85%);
+}
+
+
 .leaflet-menu {
     display: none;
     position: absolute;
@@ -72,8 +86,7 @@
     float: left;
     border: 0
 }
-
-        #map {
+ #map {
             width: 100%;
             height: 500px;
             max-height: 70vh;
@@ -83,86 +96,7 @@
             margin-top: 10px;
         }
 
-        /* Dark mode styles */
-        body.dark-mode {
-            background-color: #222; /* Darker background color for main page */
-            color: #fff;
-        }
 
-
-        body.dark-mode div[class="p-3 px-md-4 mb-3 bg-white border-bottom box-shadow"],
-        body.dark-mode select[class="custom-select"],
-        body.dark-mode select[class="custom-select d-block w-100"],
-        body.dark-mode input[type="option"],
-        body.dark-mode input[class="form-control"],
-        body.dark-mode #border,
-        body.dark-mode .collapse textarea,
-        body.dark-mode textarea {
-            background-color: #333; /* Dark background color for text inputs in dark mode */
-            color: #fff; /* Light text color for text inputs in dark mode */
-            border-color: #666; /* Dark border color for text inputs in dark mode */
-        }
-
-body.dark-mode #border.dark-mode-bg {
-        background-color: #222; /* Darker background color for main page in dark mode */
-        border-color: #666; /* Dark border color for the container in dark mode */
-    }
-
-    body.dark-mode #border.dark-mode-bg .box-shadow {
-        box-shadow: 0 0 10px rgba(255, 255, 255, 0.2); /* Dark shadow for the container in dark mode */
-    }
-
-    /* Dark mode toast styles */
-body.dark-mode .toast {
-    background-color: #333; /* Dark background color for toast */
-    color: #fff; /* Light text color for toast in dark mode */
-}
-
-body.dark-mode .toast-header {
-    background-color: #555; /* Dark background color for toast header */
-    color: #fff; /* Light text color for toast header in dark mode */
-}
-
-body.dark-mode .toast-header .close {
-    color: #fff; /* Light close icon color for toast in dark mode */
-}
-
-body.dark-mode .toast-body {
-    background-color: #333; /* Dark background color for toast body */
-    color: #fff; /* Light text color for toast body in dark mode */
-}
-/* Dark mode modal styles */
-body.dark-mode .modal-content {
-    background-color: #333; /* Dark background color for modal content */
-    color: #fff; /* Light text color for modal content in dark mode */
-}
-
-body.dark-mode .modal-header {
-    background-color: #555; /* Dark background color for modal header */
-    color: #fff; /* Light text color for modal header in dark mode */
-    border-bottom: 1px solid #666; /* Dark border color for modal header in dark mode */
-}
-
-body.dark-mode .modal-body {
-    background-color: #333; /* Dark background color for modal body */
-    color: #fff; /* Light text color for modal body in dark mode */
-}
-
-body.dark-mode .modal-footer {
-    background-color: #333; /* Dark background color for modal footer */
-    color: #fff; /* Light text color for modal footer in dark mode */
-    border-top: 1px solid #666; /* Dark border color for modal footer in dark mode */
-}
-
-body.dark-mode .modal-header .close {
-    color: #fff; /* Light close icon color for modal in dark mode */
-}
-
-body.dark-mode .modal-footer button {
-    color: #fff; /* Light button text color for modal footer in dark mode */
-    background-color: #555; /* Dark button background color for modal footer in dark mode */
-    border-color: #555; /* Dark border color for buttons in modal footer in dark mode */
-}
 .marker-menu {
     display: flex;
     flex-direction: column;
@@ -233,154 +167,300 @@ body.dark-mode .modal-footer button {
     padding: 4px; /* Adjust padding as needed */
 }
 
-    </style>
-</head>
-
-<body>
-  {% if version_message %}
-        <div class="alert alert-warning" role="alert">
-            {{ version_message }}
-        </div>
-    {% endif %}
-
-  {% if github_broadcast %}
-    <div class="alert alert-info" role="alert">
-        {{ github_broadcast }}
-    </div>
-    {% endif %}
-
-{% if timeout_message %}
-        <div class="alert alert-warning" role="alert">
-            {{ timeout_message }}
-        </div>
-    {% endif %}
-    {% if error_message %}
-        <div class="alert alert-danger" role="alert">
-            {{ error_message }}
-        </div>
-    {% endif %}
-<p><br></p>
-
-<div class="d-flex flex-column align-items-center flex-md-row container">
-    <h4 class="my-0 mx-auto font-weight-normal">GeoPort - Your location, Anywhere!</h4>
-    <a id="about-btn" class="btn btn-outline-primary pl-4 pr-4" href="#" title="GeoPort" style="display: none;">About</a>
-    <a id="exit-btn" class="btn btn-outline-primary pl-4 pr-4 ml-4" href="#" title="GeoPort" onclick="exitApp()">Exit</a>
-</div>
 
 
 
-<!-- Dark Mode switch -->
-<div class="d-flex justify-content-md-end mt-3 container">
-    <div class="form-check form-switch">
-        <input class="form-check-input" type="checkbox" role="switch" id="darkModeSwitch" onchange="toggleDarkMode()">
-        <label class="form-check-label" for="darkModeSwitch">Dark Mode</label>
-
-    </div>
-</div>
-<div class="d-flex justify-content-md-end mt-3 container">
-    <div class="form-check form-switch">
-          <input class="form-check-input" type="checkbox" role="switch" id="enableFuelPrices" onchange="toggleFuelTypeVisibility()">
-            <label for="enableFuelPrices"> Fuel Mode</label>
-    </div>
-</div>
 
 
 
-<div class="container">
-<!--    <div class="p-3 px-md-4 mb-3 bg-white border-bottom box-shadow dark-mode-bg"  id="border">-->
-    <div class="p-3 px-md-4 mb-3 border-bottom box-shadow dark-mode-bg"  id="border">
-
-</div>
-
-
-	<!-- Connect Device -->
-{% if error_messages %}
-    <button type="button" class="btn btn-primary pl-4 pr-4" id="connect" onclick="connectDevice()" disabled>
-        <span id="connectText">Connect Device</span>
-    </button>
-{% else %}
-    <br>
-      <form>
-    <div class="mb-3">
-        <label for="device">Select Device:</label><br>
-        <div class="row">
-            <div class="col">
-                <select class="custom-select d-block w-100" id="device" required>
-                </select>
-            </div>
-            <div class="col-md-auto">
-                <button type="button" class="btn btn-primary pl-4 pr-4" id="refresh" onclick="populateDeviceList()">Refresh</button>
-            </div>
-        </div>
-    </div>
-</form>
 
 
 
-    <!-- Keeping this code for the connection details drop down list, but hiding it. Not really required, but handy for debugging -->
-<div class="mb-3" style="display: none;">
-    <label for="connection">Connection:</label><br>
-    <div class="row">
-        <div class="col">
-            <select class="custom-select d-block w-100" id="connection" required>
-            </select>
-        </div>
-    </div>
-</div>
-
-<button type="button" class="btn btn-primary pl-4 pr-4" id="connect" onclick="connectDevice()">
-    <span id="connectText">Connect Device</span>
-    <span id="spinner" class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display: none;"></span>
-</button>
-
-<button type="button" class="btn btn-danger pl-4 pr-4" id="disconnect" onclick="disconnectDevice()" style="display: none;">
-    Disconnect
-</button>
+/* Dark Mode Variant */
+.dark-mode {
+    --background-gradient: linear-gradient(135deg, #121212 0%, #333333 100%);
+    --glass-background: rgba(50, 50, 50, 0.2);
+    --glass-border: rgba(100, 100, 100, 0.125);
+    --text-color: #f4f4f4;
+    --accent-color: #4ecdc4;
+}
 
 
-    <!-- Add this input element with ID "rsdData" -->
-<input class="form-control" type="text" id="rsdData" placeholder="RSD Data…" readonly style="display: none;">  <!-- Initially hidden -->
+/* Adjust background color for fuelText in normal mode */
+#fuelText {
+    background: rgba(50, 50, 50, 0.1); /* A slightly darker color to match the other text areas */
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
 
-{% endif %}
+/* Dark Mode Variant for fuelText (Already defined correctly) */
+.dark-mode #fuelText {
+    background: rgba(50, 50, 50, 0.2); /* Matches the dark mode design */
+}
 
-<p></p>
-    <form>
-<!-- Not implemented in standard version -->
-<!--<div class="mb-3">-->
-<!--        <input type="checkbox" role="switch" id="enableFuelPrices" onchange="toggleFuelTypeVisibility()" checked>-->
-<!--        <label for="enableFuelPrices"> Enable best fuel prices (Australia only)</label>-->
-<!--    </div>-->
 
-<!--     Fuel Region Dropdown -->
-    <div class="mb-3" id="fuelRegionSection" style="display: none;">
-    <label for="fuelRegion">Select Region:</label>
-    <select class="custom-select" id="fuelRegion" onchange="handleFuelTypeChange()">
-        <option value="All">All</option>
-        <option value="ACT">ACT</option>
-        <option value="NSW">NSW</option>
-        <option value="QLD">QLD</option>
-        <option value="VIC">VIC</option>
-        <option value="WA">WA</option>
-    </select>
-</div>
-        <!--     Fuel Type Dropdown -->
-    <div class="mb-3" id="fuelTypeSection" style="display: none;">
-        <label for="fuelType">Select fuel type:</label>
-        <select class="custom-select" id="fuelType" onchange="handleFuelTypeChange()">
-            <!-- Options will be populated dynamically -->
-        </select>
-        <p></p>
-        <div class="form-group">
-            <div class="collapse" id="fuelDataCollapse">
-                <label for="fuelText">Fuel Data</label>
-                <textarea class="form-control" id="fuelText" rows="8" readonly disabled></textarea>
-            </div>
-        </div>
-    </div>
+html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--background-gradient);
+    font-family: 'Poppins', sans-serif;
+    overflow-x: hidden;
+    color: var(--text-color);
+    transition: all 0.3s ease;
+}
 
-	<div id="dataList" class="mb-3"></div>
-        </form>
-	<div id="map"></div>
+.container {
+    background: var(--glass-background);
+    border-radius: 16px;
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    color: var(--text-color);
+}
+
+#map {
+    height: 500px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    background: var(--glass-background);
+    border: 1px solid var(--glass-border);
+}
+
+.btn {
+    background: rgba(255,255,255,0.2);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.125);
+    backdrop-filter: blur(4px);
+    transition: all 0.3s ease;
+    border-radius: 12px;
+}
+
+.btn:hover {
+    background: rgba(255,255,255,0.3);
+    transform: scale(1.05);
+}
+
+/* Keep the rest of the form controls' background consistent */
+.form-control,
+.form-select,
+.custom-select,
+select {
+    background: rgba(255, 255, 255, 0.1); /* Light mode background for form controls */
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    color: var(--text-color, black);
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+}
+
+/* Dark mode styles for form controls */
+.dark-mode .form-control,
+.dark-mode .form-select,
+.dark-mode .custom-select,
+.dark-mode select {
+    background: rgba(50, 50, 50, 0.1);
+    color: var(--text-color);
+}
+
+.form-control::placeholder,
+.form-select option {
+    color: rgba(255,255,255,0.7);
+}
+
+.modal-content {
+    background: var(--glass-background);
+    border-radius: 16px;
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(10px);
+    color: var(--text-color);
+}
+
+.glassmorphic-card {
+    //background: var(--glass-background);
+    //border: 1px solid var(--glass-border);
+    //backdrop-filter: blur(10px);
+    border-radius: 12px;
+    color: var(--text-color);
+    margin-bottom: 20px;
+}
+.alert.glassmorphic-card {
+    background: var(--glass-background);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    color: var(--text-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.alert.alert-info.glassmorphic-card {
+    background: rgba(61, 130, 247, 0.2); /* Soft blue for info alerts */
+    border-color: rgba(61, 130, 247, 0.3);
+}
+
+.alert.alert-warning.glassmorphic-card {
+    background: rgba(255, 193, 7, 0.2); /* Soft yellow for warning alerts */
+    border-color: rgba(255, 193, 7, 0.3);
+}
+
+.alert.alert-danger.glassmorphic-card {
+    background: rgba(220, 53, 69, 0.2); /* Soft red for danger alerts */
+    border-color: rgba(220, 53, 69, 0.3);
+}
+
+.alert.alert-success.glassmorphic-card {
+    background: rgba(25, 135, 84, 0.2); /* Soft green for success alerts */
+    border-color: rgba(25, 135, 84, 0.3);
+}
+
+.form-check-input:checked {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+/* Utility classes for smooth transitions */
+.transition {
+    transition: all 0.3s ease;
+}
+
+    //Hyperlink
+/* Basic hyperlink styling */
+a {
+    color: #4ecdc4; /* Use your accent color */
+    text-decoration: none;
+    transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+
+/* Hover effect */
+a:hover {
+    color: #a0e0d5; /* Light, contrasting shade for better readability */
+    text-decoration: underline;
+    text-shadow: 0 0 5px rgba(78, 205, 196, 0.5);
+}
+
+/* Visited links */
+a:visited {
+    color: #3b9b98; /* Slightly darker shade for visited links */
+}
+
+    #loc-search {
+    border: none; /* Remove the border */
+}
+
+/* Light Mode Toasts */
+.toast {
+    background: rgba(255, 255, 255, 0.15); /* Light glassmorphic background */
+    border: 1px solid rgba(255, 255, 255, 0.2); /* Light border */
+    color: var(--text-color); /* White text in light mode */
+    backdrop-filter: blur(6px); /* Add blur effect for glassmorphism */
+    border-radius: 8px; /* Rounded corners */
+}
+
+.toast-header {
+    background: rgba(255, 255, 255, 0.1); /* Lighter background for the header */
+    color: var(--text-color); /* White text for the header */
+    font-weight: bold;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.toast-body {
+    background: rgba(255, 255, 255, 0.1); /* Light background for the body */
+    color: var(--text-color); /* White text for the body */
+}
+
+/* Dark Mode Toasts */
+.dark-mode .toast {
+    background: rgba(50, 50, 50, 0.3); /* Dark glassmorphic background */
+    border: 1px solid rgba(100, 100, 100, 0.3); /* Dark border */
+    color: var(--text-color); /* Light text in dark mode */
+}
+
+.dark-mode .toast-header {
+    background: rgba(50, 50, 50, 0.3); /* Dark header */
+    color: var(--text-color); /* White text in dark mode */
+    font-weight: bold;
+    border-bottom: 1px solid rgba(100, 100, 100, 0.3); /* Dark border for header */
+}
+
+.dark-mode .toast-body {
+    background: rgba(50, 50, 50, 0.2); /* Dark body background */
+    color: var(--text-color); /* White text for body */
+}
+
+/* Utility class for the close button */
+.toast .btn-close {
+    filter: invert(1); /* Make the close button white in both modes */
+}
+
+/* Optional: Toast color variants for different types (Success, Info, Warning, Danger) */
+
+/* Success Toast */
+.toast-success {
+    background: rgba(25, 135, 84, 0.3); /* Soft green background */
+    border: 1px solid rgba(25, 135, 84, 0.4);
+}
+
+/* Info Toast */
+.toast-info {
+    background: rgba(61, 130, 247, 0.3); /* Soft blue background */
+    border: 1px solid rgba(61, 130, 247, 0.4);
+}
+
+/* Warning Toast */
+.toast-warning {
+    background: rgba(255, 193, 7, 0.3); /* Soft yellow background */
+    border: 1px solid rgba(255, 193, 7, 0.4);
+}
+
+/* Danger Toast */
+.toast-danger {
+    background: rgba(220, 53, 69, 0.3); /* Soft red background */
+    border: 1px solid rgba(220, 53, 69, 0.4);
+}
+
+/* Utility class for smooth transitions */
+.transition {
+    transition: all 0.3s ease;
+}
+/* Disabled state for the #connect button */
+#connect:disabled {
+    background: rgba(40, 167, 69, 0.3); /* Brighter green background with more opacity */
+    border: 2px solid #34c759; /* Vibrant green border (similar to Apple's green) */
+    color: #34c759; /* Matching green text color */
+    cursor: not-allowed; /* Change cursor to indicate disabled state */
+}
+
+
+/* Default btn style for #disconnect button */
+#disconnect {
+    background: rgba(220, 53, 69, 0.15); /* Soft red background when disabled */
+    border: 2px solid #dc3545; /* Red border when disabled */
+    color: #dc3545; /* Red text color */
+    cursor: not-allowed; /* Change cursor to indicate disabled state */
+}
+
+/* Default btn style for #exit button */
+#exit-btn {
+    background: rgba(220, 53, 69, 0.25); /* Darker soft red background when disabled */
+    border: 2px solid #c82333; /* Darker red border */
+    color: #c82333; /* Darker red text color */
+    cursor: not-allowed; /* Change cursor to indicate disabled state */
+}
+
+
+
+
+
+
+/* Mobile tweaks: a bit more "zoomed in" and thumb-friendly */
+@media (max-width: 768px) {
+  body { font-size: 15px; }
+  .container { padding-left: 10px !important; padding-right: 10px !important; }
+  /* shrink map to make controls feel less cramped on iPhone */
+  #map { height: 40vh !important; }
+  .btn { padding: 10px 12px !important; font-size: 15px !important; }
+  select, input, .form-control { font-size: 15px !important; }
+}
+
+</style>
 
 <script>
 //=========================== leaflet menu ====================
@@ -630,126 +710,77 @@ async function initializeMap(userLocale) {
         keyboard: false // Disable keyboard navigation
     });
 
-    // Create tile layers
-    var stadiaTileLayer = L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
-        maxZoom: 19,
-        noWrap: true,
-        attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> contributors'
-    });
-
-    var openStreetMapTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    });
-
-    var OpenStreetMap_HOT = L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
-	    maxZoom: 19,
-	    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles style by <a href="https://www.hotosm.org/" target="_blank">Humanitarian OpenStreetMap Team</a> hosted by <a href="https://openstreetmap.fr/" target="_blank">OpenStreetMap France</a>'
-    });
-
-    var OPNVKarte = L.tileLayer('https://tileserver.memomaps.de/tilegen/{z}/{x}/{y}.png', {
-	maxZoom: 18,
-	attribution: 'Map <a href="https://memomaps.de/">memomaps.de</a> <a href="http://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, map data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    });
-    var Stadia_AlidadeSmooth = L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.{ext}', {
-	minZoom: 0,
-	maxZoom: 20,
-	attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-	ext: 'png'
-    });
-
-    var Stadia_AlidadeSmoothDark = L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.{ext}', {
-        minZoom: 0,
-        maxZoom: 20,
-        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'png'
-    });
-    var Stadia_AlidadeSatellite = L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_satellite/{z}/{x}/{y}{r}.{ext}', {
-        minZoom: 0,
-        maxZoom: 20,
-        attribution: '&copy; CNES, Distribution Airbus DS, © Airbus DS, © PlanetObserver (Contains Copernicus Data) | &copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'jpg'
-    });
-    var Stadia_Outdoors = L.tileLayer('https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.{ext}', {
-        minZoom: 0,
-        maxZoom: 20,
-        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'png'
-    });
-    var Stadia_StamenToner = L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_toner/{z}/{x}/{y}{r}.{ext}', {
-        minZoom: 0,
-        maxZoom: 20,
-        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://www.stamen.com/" target="_blank">Stamen Design</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'png'
-    });
-    var Stadia_StamenWatercolor = L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_watercolor/{z}/{x}/{y}.{ext}', {
-        minZoom: 1,
-        maxZoom: 16,
-        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://www.stamen.com/" target="_blank">Stamen Design</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'jpg'
-    });
-    var Stadia_StamenTerrain = L.tileLayer('https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.{ext}', {
-        minZoom: 0,
-        maxZoom: 18,
-        attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://www.stamen.com/" target="_blank">Stamen Design</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-        ext: 'png'
-    });
-    var Esri_WorldStreetMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012'
-    });
-    var Esri_WorldTopoMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community'
-    });
-    var Esri_WorldImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-    });
-    var CartoDB_Voyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20
-    });
-
-    // Use searchLocation to get coordinates based on userLocale
+    // Load dynamic map overlays from /api/map_layers (live-updatable via GitHub MAP_LAYERS.json or ~/.geoport/map_layers.json!)
     await searchLocation(userLocale);
-
     map.on('dblclick', handleMapDoubleClick);
-
-    // Set the zoom level to 4
     map.setZoom(4);
 
-    // // Use Stadia Maps as the tile layer
-    // L.tileLayer('https://tiles.stadiamaps.com/tiles/osm_bright/{z}/{x}/{y}{r}.png', {
-    //     maxZoom: 19,
-    //     noWrap: true, // Prevent tiles from wrapping around the world
-    //     attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> contributors'
-    // }).addTo(map);
+    var baseLayers = {};
+    var layerIdToInstance = {};
+    var defaultLayerInstance = null;
+    try {
+        const layersResp = await fetch('/api/map_layers');
+        const layersCfg = await layersResp.json();
+        const hostLower = (window.location.hostname || '').toLowerCase();
+        const isLocalhost = hostLower === 'localhost' || hostLower === '127.0.0.1' || hostLower === '[::1]';
+        const stadiaKey = (localStorage.getItem('geoport_stadia_key') || layersCfg.stadia_api_key || '').trim();
 
+        const decorateTileUrl = (u, isStadia) => {
+            if (isStadia && stadiaKey && u.indexOf('api_key=') === -1) {
+                return u + (u.indexOf('?') === -1 ? '?' : '&') + 'api_key=' + encodeURIComponent(stadiaKey);
+            }
+            return u;
+        };
 
-    // Add default tile layer
-    stadiaTileLayer.addTo(map);
+        (layersCfg.layers || []).forEach((def) => {
+            if (def.stadia && !isLocalhost && !stadiaKey) return;
+            let leafletLayer;
+            if (Array.isArray(def.sublayers) && def.sublayers.length > 0) {
+                const subs = def.sublayers.map((s, idx) => L.tileLayer(decorateTileUrl(s.url, def.stadia), {
+                    maxZoom: s.maxZoom || def.maxZoom || 19,
+                    className: s.className || def.className || '',
+                    attribution: idx === 0 ? (def.attribution || '') : ''
+                }));
+                leafletLayer = L.layerGroup(subs);
+            } else {
+                leafletLayer = L.tileLayer(decorateTileUrl(def.url, def.stadia), {
+                    maxZoom: def.maxZoom || 19,
+                    noWrap: true,
+                    className: def.className || '',
+                    attribution: def.attribution || ''
+                });
+            }
+            baseLayers[def.name] = leafletLayer;
+            layerIdToInstance[def.id] = leafletLayer;
+        });
 
-    // Define tile layer control options
-    var baseLayers = {
-        "Stadia Maps": stadiaTileLayer,
-        "OpenStreetMap": openStreetMapTileLayer,
-        "OpenStreetMap_HOT": OpenStreetMap_HOT,
-        "OPNVKarte": OPNVKarte,
-        "Stadia Alidade Smooth": Stadia_AlidadeSmooth,
-        "Stadia Alidade Smooth Dark": Stadia_AlidadeSmoothDark,
-        "Stadia Alidade Satellite": Stadia_AlidadeSatellite,
-        "Stadia Outdoors": Stadia_Outdoors,
-        "Stadia Stamen Toner": Stadia_StamenToner,
-        "Stadia Stamen Watercolor": Stadia_StamenWatercolor,
-        "Stadia Stamen Terrain": Stadia_StamenTerrain,
-        "Esri World Street Map": Esri_WorldStreetMap,
-        "Esri World Topo Map": Esri_WorldTopoMap,
-        "Esri World Imagery": Esri_WorldImagery,
-        "CartoDB Voyager": CartoDB_Voyager,
+        const savedClassicName = localStorage.getItem('geoport_classic_layer');
+        const preferredDefaultId = (isLocalhost || stadiaKey)
+            ? ((layersCfg.defaults && layersCfg.defaults.classic_localhost) || 'stadia_osm_bright')
+            : ((layersCfg.defaults && layersCfg.defaults.classic) || 'esri_world_street');
+        defaultLayerInstance = (savedClassicName && baseLayers[savedClassicName])
+            || layerIdToInstance[preferredDefaultId]
+            || Object.values(baseLayers)[0];
+    } catch (layerErr) {
+        console.warn('Falling back to built-in OpenStreetMap layer:', layerErr);
+    }
 
+    if (!defaultLayerInstance) {
+        defaultLayerInstance = L.tileLayer('/api/tiles/osm/{z}/{x}/{y}', {
+            maxZoom: 19,
+            noWrap: true,
+            attribution: '&copy; OpenStreetMap contributors'
+        });
+        baseLayers["OpenStreetMap"] = defaultLayerInstance;
+    }
 
-    };
-
-    // Add layer control to map
+    defaultLayerInstance.addTo(map);
     L.control.layers(baseLayers).addTo(map);
+    map.on('baselayerchange', function(ev) {
+        if (ev && ev.name) {
+            localStorage.setItem('geoport_classic_layer', ev.name);
+        }
+    });
 
 
 
@@ -1029,23 +1060,22 @@ window.validateInput = function(input) {
 
 // Define the saveCustomSpeed function
 window.saveCustomSpeed = function() {
-    // Get the entered value
     var customSpeedInput = document.getElementById('customSpeedInput');
-    var velocitySelect = customSpeedInput.value.trim(); // Trim leading and trailing whitespace
+    var customVal = customSpeedInput ? customSpeedInput.value.trim() : '';
 
-    // Check if the entered value is 0 or null or empty
-    if (velocitySelect === '0' || velocitySelect === null || velocitySelect === '') {
-        // If the value is 0 or null or empty, show an alert and return without saving
+    if (customVal === '0' || customVal === null || customVal === '') {
         alert('Speed value cannot be 0 or empty.\nValue not saved!');
         return;
     }
 
-    // Log the velocitySelect value to console
+    // Update global velocitySelect (fixes variable-shadowing bug)
+    velocitySelect = customVal;
     console.log('VelocitySelect set to:', velocitySelect);
 
-    // Close the modal
-    var modal = new bootstrap.Modal(document.getElementById('customSpeedModal'));
-    modal.hide();
+    var modalEl = document.getElementById('customSpeedModal');
+    if (modalEl) {
+        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    }
 };
 
 // Initialize menu with an empty object
@@ -1078,33 +1108,28 @@ var menu = L.leafletMenu(map, {
         Custom: {
         label: 'Custom Speed',
         onClick: function () {
-            // Create the modal HTML
-            var modalHtml = `
-                <div class="modal fade" id="customSpeedModal" tabindex="-1" aria-labelledby="customSpeedModalLabel" aria-hidden="true">
-                <div class="modal-dialog">
-                    <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="customSpeedModalLabel">Custom Speed</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            if (!document.getElementById('customSpeedModal')) {
+                var modalHtml = `
+                    <div class="modal fade" id="customSpeedModal" tabindex="-1" aria-labelledby="customSpeedModalLabel" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="customSpeedModalLabel">Custom Speed</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <input type="text" class="form-control" id="customSpeedInput" placeholder="Enter custom speed (Km/H) - Limit: 3 digits 2 decimals" oninput="validateInput(this)">
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            <button type="button" class="btn btn-primary" onclick="validateInput(document.getElementById('customSpeedInput')); saveCustomSpeed();" data-bs-dismiss="modal">Save changes</button>
+                        </div>
+                        </div>
                     </div>
-                    <div class="modal-body">
-                        <input type="text" class="form-control" id="customSpeedInput" placeholder="Enter custom speed (Km/H) - Limit: 3 digits 2 decimals" oninput="validateInput(this)">
-
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        <button type="button" class="btn btn-primary" onclick="validateInput(document.getElementById('customSpeedInput')); saveCustomSpeed();" data-bs-dismiss="modal">Save changes</button>
-                    </div>
-                    </div>
-                </div>
-                </div>`;
-
-            // Append the modal HTML to the body
-            document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-            // Show the modal
-            var customSpeedModal = new bootstrap.Modal(document.getElementById('customSpeedModal'));
-            customSpeedModal.show();
+                    </div>`;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+            }
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('customSpeedModal')).show();
         }
     }
 }
@@ -1163,29 +1188,51 @@ fileLayerControlContainer.appendChild(dashboardButton.button);
 // Add the custom class to the EasyButton's container element
 dashboardButton.button.classList.add('leaflet-control-filelayer-custom');
 
-// Create the custom button
-var customButton = L.DomUtil.create('a', 'leaflet-bar leaflet-control-zoom-in leaflet-bar-part leaflet-control-custom', document.querySelector('.leaflet-control-filelayer'));
-customButton.innerHTML = '<i class="lni lni-trash-can"></i>'; // Replace 'fa-example' with the desired icon class
-customButton.title = 'Clear markers'; // Add title for the button
 
-// Add CSS class for styling the custom button
-customButton.classList.add('leaflet-control-filelayer-custom');
 
-// Add event listener and logic for the custom button as needed
-// Function to clear GPX data
-customButton.onclick = function() {
-    drawnItems.clearLayers(); // Clear layers from map including the textbox
-    lineLatLngs = []; // Clear array storing coordinates
-    isPlaybackStopped = true; // Stop playback if active
-    playbackIndex = 0;
-    console.log("Trash: isPlaybackStopped", isPlaybackStopped);
 
-    // Hide the textbox
-    var textbox = document.getElementById('timeToPointText');
-    if (textbox) {
-        textbox.style.display = 'none';
-};
-}
+
+// Create the custom EasyButton
+var clearButton = L.easyButton({
+    states: [{
+        stateName: 'clear-markers',
+        icon: 'lni lni-trash-can', // Replace with your desired icon class
+        title: 'Clear markers',
+        onClick: function (btn, map) {
+            // Logic to clear the layers and reset values
+            drawnItems.clearLayers(); // Clear layers from map including the textbox
+            lineLatLngs = []; // Clear array storing coordinates
+            isPlaybackStopped = true; // Stop playback if active
+            playbackIndex = 0;
+            console.log("Trash: isPlaybackStopped", isPlaybackStopped);
+
+            // Hide the textbox if it exists
+            var textbox = document.getElementById('timeToPointText');
+            if (textbox) {
+                textbox.style.display = 'none';
+            }
+        }
+    }]
+});
+
+// Add custom styles for the button (optional)
+clearButton.button.style.fontSize = '24px'; // Adjust the font size as needed
+clearButton.button.style.paddingLeft = '4px';
+
+// Add the EasyButton to the map
+clearButton.addTo(map);
+
+// Optionally, you can move the button to a custom location or append it to an existing container
+var fileLayerControlContainer = document.querySelector('.leaflet-control-filelayer');
+fileLayerControlContainer.appendChild(clearButton.button);
+clearButton.button.classList.add('leaflet-control-filelayer-custom');
+
+
+
+
+
+
+
 
 // Function to handle map click for drawing polyline
 function handleMapClick(event) {
@@ -1262,14 +1309,21 @@ function calculateRoute(startPoint, endPoint) {
             serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1/',
             profile: 'walking'
         }),
-        show: false // Do not show the route on the map
+        show: false // Do not show the route panel on the map
     }).on('routesfound', function(e) {
-        // Get the route from the event
         var route = e.routes[0];
-        // Extract the coordinates from the route
-        var coordinates = route.coordinates;
-        // Draw the polyline using the coordinates
-        var polyline = L.polyline(coordinates, {color: 'blue'}).addTo(drawnItems);
+        var coordinates = route.coordinates || [];
+        L.polyline(coordinates, {color: 'blue'}).addTo(drawnItems);
+        // Append street-level route points into lineLatLngs so playback follows actual roads
+        if (coordinates.length > 1) {
+            if (lineLatLngs.length >= 1) {
+                lineLatLngs.pop(); // Replace raw straight-line end waypoint with full routed path
+            }
+            coordinates.forEach(function(c, idx) {
+                if (idx === 0 && lineLatLngs.length > 0) return;
+                lineLatLngs.push([c.lat, c.lng]);
+            });
+        }
     }).addTo(drawnItems);
 }
 
@@ -1439,26 +1493,46 @@ function handleSearch() {
     searchLocation(input);
 }
 
-// Function to search location
+// Function to search location (supports both "lat, lng" coordinate pairs and Nominatim place queries)
 async function searchLocation(input, userLocale) {
-    // Initialize the OSM provider for searching
+    if (!input || typeof input !== 'string' || !input.trim()) {
+        return;
+    }
+    const trimmed = input.trim();
+    const coordMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/);
+    if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+            if (!marker) {
+                marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+                marker.on('dragend', handleMarkerDragEnd);
+                marker.on('contextmenu', handleMarkerRightClick);
+            } else {
+                marker.setLatLng([lat, lng]);
+            }
+            map.setView([lat, lng], 13);
+            setCoordinates(lat, lng);
+            return;
+        }
+    }
+
     var provider = new GeoSearch.OpenStreetMapProvider();
     try {
-        const results = await provider.search({ query: input });
+        const results = await provider.search({ query: trimmed });
         if (results.length > 0) {
             const { x, y } = results[0];
             if (!marker) {
                 marker = L.marker([y, x], { draggable: true }).addTo(map);
-                marker.on('dragend', handleMarkerDragEnd); // Add event listener for marker drag
-                marker.on('contextmenu', handleMarkerRightClick); // Add event listener for marker right-click
-
+                marker.on('dragend', handleMarkerDragEnd);
+                marker.on('contextmenu', handleMarkerRightClick);
             } else {
                 marker.setLatLng([y, x]);
             }
             map.setView([y, x], 13);
             setCoordinates(y, x);
         } else {
-            alert("No results found for the provided location");
+            displayToast("No results found for: " + trimmed);
         }
     } catch (error) {
         console.error('Error during geocoding:', error);
@@ -1705,7 +1779,8 @@ function calculateTime(distance, velocity) {
         "ride": 20,  // km/h
         "drive": 50  // km/h
     };
-    const speedKmh = speed[velocity] || speed["walk"]; // Default to walking speed if velocity is not found
+    const numericSpeed = parseFloat(velocity);
+    const speedKmh = speed[velocity] || (!isNaN(numericSpeed) && numericSpeed > 0 ? numericSpeed : speed["walk"]);
 
     // Convert distance to kilometers and calculate time in seconds
     return (distance / speedKmh) * 3600;
@@ -1779,19 +1854,20 @@ function resetPlaybackFlag() {
 
 // Function to handle keyboard directional key presses
 function handleKeyDown(event) {
+    if (!marker) return;
+    const tag = (event.target && event.target.tagName) ? event.target.tagName.toUpperCase() : '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
     const stepSize = 0.0001; // Adjust this value as needed
     const latLng = marker.getLatLng();
-    console.log('key down');
     let newLatLng;
 
     switch (event.key) {
         case 'ArrowUp':
             newLatLng = [latLng.lat + stepSize, latLng.lng];
-            console.log("up");
             break;
         case 'ArrowDown':
             newLatLng = [latLng.lat - stepSize, latLng.lng];
-            console.log("down");
             break;
         case 'ArrowLeft':
             newLatLng = [latLng.lat, latLng.lng - stepSize];
@@ -1804,8 +1880,8 @@ function handleKeyDown(event) {
     }
 
     marker.setLatLng(newLatLng);
-    setLocationArrows();
     setCoordinates(newLatLng[0], newLatLng[1]);
+    setLocationArrows();
 
     event.preventDefault(); // Prevent default behavior of arrow key presses
 }
@@ -1824,6 +1900,7 @@ function populateDeviceList() {
         .then(response => response.json())
         .then(data => {
             console.log('data:', data);
+
             // Clear existing options
             deviceDropdown.innerHTML = '';
             connectionDropdown.innerHTML = '';
@@ -1930,19 +2007,40 @@ function populateDeviceList() {
 
 
 
-    // Connect Device Function
+function exportPairingFile() {
+    var deviceDropdown = document.getElementById('device');
+    if (!deviceDropdown || !deviceDropdown.value) {
+        displayToast("Select a paired device first to export its pairing file.");
+        return;
+    }
+    try {
+        var selectedOptionValue = JSON.parse(deviceDropdown.value);
+        var udid = selectedOptionValue.Identifier;
+        if (!udid) {
+            displayToast("No device UDID available.");
+            return;
+        }
+        window.location.href = '/api/export_pairing/' + encodeURIComponent(udid);
+    } catch (e) {
+        console.error('Error exporting pairing file:', e);
+        displayToast("Unable to export pairing file.");
+    }
+}
+
 // Connect Device Function
 function connectDevice() {
-    // Display "Connecting, please wait..."
     var connectButton = document.getElementById('connect');
     var connectTextElement = document.getElementById('connectText');
     var spinnerElement = document.getElementById('spinner');
     var deviceDropdown = document.getElementById('device');
-    var selectedOptionValue = JSON.parse(document.getElementById('device').value);
+    if (!deviceDropdown || !deviceDropdown.value) {
+        displayToast("No device selected. Click Refresh once your iOS device is unlocked on USB or Wi-Fi.");
+        return;
+    }
+    var selectedOptionValue = JSON.parse(deviceDropdown.value);
     console.log('device info:', deviceDropdown);
     console.log('selectedOptionValue: ', selectedOptionValue);
 
-    // Extract relevant information from selectedOptionValue
     var selectedDeviceIdentifier = selectedOptionValue.Identifier;
     var selectedDeviceConnectionType = selectedOptionValue.ConnectionType;
     var productVersion = selectedOptionValue.ProductVersion;
@@ -1954,44 +2052,23 @@ function connectDevice() {
     var selectedDeviceVersion = productVersion;
     var selectedDeviceConnType = selectedDeviceConnectionType;
     var selectedDeviceCountry = selectedOptionValue.userLocale;
-    //var selectedDeviceWifiAddress = wifiAddress;
+    var selectedDeviceWifiAddress = selectedOptionValue.wifiAddress || null;
+    var selectedDeviceWifiPort = selectedOptionValue.wifiPort || null;
+    var selectedDeviceWifiEndpoints = selectedOptionValue.wifiEndpoints || [];
     var selectedDevicePlatform = "{{ current_platform }}";
     var appVersionNum = "{{ app_version_num }}";
     var appType = "{{ app_version_type }}";
 
-    console.log('identifier: ', selectedDeviceIdentifier);
-    console.log('connType: ', selectedDeviceConnectionType);
-    console.log('Product Version:', productVersion);
-    console.log('Device Name:', deviceName);
-    console.log('Device Class:', deviceClass);
-    console.log('WiFi State:', SelectedDeviceWifiState);
-
-
-
-
-<!--    console.log('Connecting device:', selectedDeviceIdentifier);-->
-<!--    console.log('iOS Version:', selectedDeviceVersion);-->
-<!--    console.log('Device Name:', selectedDeviceName);-->
-<!--    console.log('Device Class:', selectedDeviceClass);-->
-<!--    console.log('Connection:', selectedDeviceConnType);-->
-<!--    console.log('Platform:', selectedDevicePlatform);-->
-<!--    console.log('App Version:', appVersionNum);-->
-<!--    console.log('wifi address:', selectedDeviceWifiAddress);-->
-
-
-    // Call the function to update DynamoDB
     updateDynamoDB(selectedDeviceIdentifier, selectedDeviceVersion, selectedDeviceName, selectedDeviceClass, selectedDevicePlatform, appVersionNum, appType, selectedDeviceConnType, SelectedDeviceWifiState, selectedDeviceCountry);
 
     if (connectTextElement) {
         connectTextElement.innerText = "Connecting, please wait...";
     }
-    // Hide the connectText and show the spinner only if not already connected
     if (connectTextElement && spinnerElement && connectTextElement.innerText !== "Connected") {
-        connectTextElement.style.display = 'inline-block'; // Display the text
-        spinnerElement.style.display = 'inline-block'; // Display the spinner
+        connectTextElement.style.display = 'inline-block';
+        spinnerElement.style.display = 'inline-block';
     }
 
-    // Make AJAX request to notify the server about the command
     fetch('/connect_device', {
         method: 'POST',
         headers: {
@@ -1999,9 +2076,11 @@ function connectDevice() {
         },
         body: JSON.stringify({
             udid: selectedDeviceIdentifier,
-            ios_version: selectedDeviceVersion, // Include iOS version in the request
-            connType: selectedDeviceConnType, //connection type USB or WIFI
-            //wifiAddress: selectedDeviceWifiAddress,
+            ios_version: selectedDeviceVersion,
+            connType: selectedDeviceConnType,
+            wifiAddress: selectedDeviceWifiAddress,
+            wifiPort: selectedDeviceWifiPort,
+            wifiEndpoints: selectedDeviceWifiEndpoints,
             wifiState: SelectedDeviceWifiState,
         }),
     })
@@ -2136,15 +2215,18 @@ function showModalWifiModeRequired() {
 
 
     /// Function to disconnect device
-    function disconnectDevice() {
+    function disconnectDevice(skipBackendStop) {
         var connectTextElement = document.getElementById('connectText');
         var connectButton = document.getElementById('connect');
         var disconnectButton = document.getElementById('disconnect');
         var deviceDropdown = document.getElementById('device');
-        stopLocation();
-        // Use navigator.sendBeacon to make the POST request without waiting for a response
-        const data = JSON.stringify({});
-        //navigator.sendBeacon('/stop_tunnel', data);
+        if (!skipBackendStop) {
+            fetch('/stop_tunnel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            }).catch(err => console.error('Error stopping tunnel:', err));
+        }
         console.log('Disconnect - Clearing');
 
         var setLocationButton = document.getElementById('set-location');
@@ -2152,29 +2234,25 @@ function showModalWifiModeRequired() {
         stopLocationButton.disabled = true;
         setLocationButton.disabled = true;
 
-        // Enable the device dropdown
         if (deviceDropdown) {
             deviceDropdown.disabled = false;
         }
 
-        // Update Disconnect button text and show Connect button
         if (disconnectButton) {
             disconnectButton.innerText = "Disconnecting, Please wait...";
             disconnectButton.style.display = 'none';
         }
 
-        // Hide rsdData text box
         var rsdDataElement = document.getElementById('rsdData');
         if (rsdDataElement) {
+            rsdDataElement.value = '';
             rsdDataElement.style.display = 'none';
         }
 
-        // Reset connectTextElement
         if (connectTextElement) {
             connectTextElement.innerText = "Connect Device";
         }
 
-        // Enable Connect button
         if (connectButton) {
             connectButton.disabled = false;
         }
@@ -2186,15 +2264,17 @@ function showModalWifiModeRequired() {
     var fuelTypeDropdown = document.getElementById('fuelType');
     var fuelText = document.getElementById('fuelText');
     var fuelRegionDropdown = document.getElementById('fuelRegion');
-    const selectedFuelRegion = fuelRegionDropdown.value;
-    const selectedFuelType = fuelTypeDropdown.value;
+    const selectedFuelRegion = fuelRegionDropdown ? fuelRegionDropdown.value : 'QLD';
+    const previousFuelType = (fuelTypeDropdown && fuelTypeDropdown.value) ? fuelTypeDropdown.value : 'U98';
     console.log('Selected Fuel Region = ', selectedFuelRegion);
-    fuelText.value = '';
-    fuelTypeDropdown.innerHTML = '';
+    if (fuelText) fuelText.value = '';
+    if (fuelTypeDropdown) fuelTypeDropdown.innerHTML = '';
 
     try {
-        const response = await fetch(`/api/fuel_types?region=${selectedFuelRegion}`);
+        const response = await fetch(`/api/fuel_types?region=${encodeURIComponent(selectedFuelRegion)}`);
+        if (!response.ok) return;
         const fuelTypes = await response.json();
+        if (!Array.isArray(fuelTypes) || fuelTypes.length === 0) return;
         fuelTypes.sort();
         fuelTypes.forEach(type => {
             var option = document.createElement('option');
@@ -2202,10 +2282,21 @@ function showModalWifiModeRequired() {
             option.text = type;
             fuelTypeDropdown.add(option);
         });
-        fuelTypeDropdown.value = selectedFuelType;
-        updateFuelText(selectedFuelType, selectedFuelRegion);
+        const chosenType = fuelTypes.includes(previousFuelType)
+            ? previousFuelType
+            : (fuelTypes.includes('U98') ? 'U98' : fuelTypes[0]);
+        fuelTypeDropdown.value = chosenType;
+        await updateFuelText(chosenType, selectedFuelRegion);
     } catch (error) {
         console.error('Error fetching fuel types:', error);
+    }
+}
+
+async function handleFuelSelectionChange() {
+    var fuelTypeDropdown = document.getElementById('fuelType');
+    var fuelRegionDropdown = document.getElementById('fuelRegion');
+    if (fuelTypeDropdown && fuelRegionDropdown && fuelTypeDropdown.value) {
+        await updateFuelText(fuelTypeDropdown.value, fuelRegionDropdown.value);
     }
 }
 
@@ -2484,87 +2575,255 @@ function continueAfterDeveloperModeRequired() {
 
 
 
+    async function hydrateSessionStatus() {
+        try {
+            const resp = await fetch('/api/status');
+            if (!resp.ok) return;
+            const info = await resp.json();
+            const sess = info && info.session;
+            if (sess && sess.connected && sess.rsd_data) {
+                const connectTextElement = document.getElementById('connectText');
+                const connectButton = document.getElementById('connect');
+                const disconnectButton = document.getElementById('disconnect');
+                const deviceDropdown = document.getElementById('device');
+                const rsdDataElement = document.getElementById('rsdData');
+
+                if (rsdDataElement) rsdDataElement.value = sess.rsd_data;
+                if (connectTextElement) connectTextElement.innerText = "Connected";
+                if (connectButton) connectButton.disabled = true;
+                if (deviceDropdown) deviceDropdown.disabled = true;
+                if (disconnectButton) {
+                    disconnectButton.style.display = 'inline-block';
+                    disconnectButton.innerText = 'Disconnect';
+                }
+                if (sess.simulating && sess.current_coordinate) {
+                    const { lat, lng } = sess.current_coordinate;
+                    await searchLocation(`${lat}, ${lng}`);
+                }
+                updateSetLocationButtonStatus();
+                updateStopLocationButtonStatus();
+            }
+        } catch (err) {
+            console.debug('Session status check skipped:', err);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
-    console.log("test");
     initializeMap();
-    searchLocation();
+
+    // Mobile-friendly defaults: enable Fuel Mode + default region to QLD + default fuel U98
+    try {
+        const enableFuel = document.getElementById('enableFuelPrices');
+        const fuelRegion = document.getElementById('fuelRegion');
+        if (enableFuel) enableFuel.checked = true;
+        if (fuelRegion) fuelRegion.value = 'QLD';
+        toggleFuelTypeVisibility();
+    } catch (e) {}
+
     handleFuelTypeChange();
     document.getElementById('rsdData').addEventListener('change', updateSetLocationButtonStatus);
     document.getElementById('coordinates').addEventListener('input', updateSetLocationButtonStatus);
     populateDeviceList();
-    updateStopLocationButtonStatus();  // Add this line to update the Stop Location button status
-    // Add event listener for keydown event
+    hydrateSessionStatus();
+    updateStopLocationButtonStatus();
     document.addEventListener('keydown', handleKeyDown);
-    console.log("listener loaded");
 
     document.getElementById('search').addEventListener('click', handleSearch);
 
-
-
-    // Add the new event listeners for 'Enter' keypress and 'Search' button click
     document.getElementById('coordinates').addEventListener('keypress', function (event) {
         if (event.key === 'Enter') {
             event.preventDefault();
             handleSearch();
         }
     });
-
-
-
-
-
-
-
-
 });
 </script>
+<script>
+    const socket = io();
 
-<p></p>
+    socket.on('connection_reset', (data) => {
+        console.log("CONNECTION RESET", data);
+        disconnectDevice(true);
+        displayToast((data && data.message) ? data.message : "Connection Reset");
+    });
 
-<div class="mb-3">
-    <div class="row align-items-center">
-        <div class="col-md-auto">
+    socket.on('tunnel_reconnected', (data) => {
+        console.log("TUNNEL RECONNECTED", data);
+        hydrateSessionStatus();
+        displayToast((data && data.message) ? data.message : "Tunnel reconnected automatically");
+    });
+
+    socket.on('tunnel_error', (data) => {
+        console.error("TUNNEL ERROR", data);
+        displayToast((data && data.message) ? data.message : "Tunnel error occurred");
+    });
+
+    socket.on('no_route_to_host', (data) => {
+        console.error("NO ROUTE TO HOST", data);
+        displayToast("Device tunnel unreachable — try reconnecting your device.");
+    });
+</script>
+
+
+
+<body>
+    {% if version_message %}
+        <div class="alert alert-warning glassmorphic-card" role="alert">{{ version_message }}</div>
+    {% endif %}
+    {% if github_broadcast %}
+    <div class="alert alert-info glassmorphic-card" role="alert">{{ github_broadcast|safe }}</div>
+{% endif %}
+    {% if timeout_message %}
+        <div class="alert alert-warning glassmorphic-card" role="alert">{{ timeout_message }}</div>
+    {% endif %}
+    {% if error_message %}
+        <div class="alert alert-danger glassmorphic-card" role="alert">{{ error_message }}</div>
+    {% endif %}
+
+    <div class="container p-3">
+        <div class="d-flex justify-content-between align-items-center">
+            <h4 class="my-0">  &nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbsp&nbspGeoPort - Your location, Anywhere!</h4>
+            <div class="d-flex align-items-center">
+                <a id="modern-ui-btn" class="btn btn-outline-primary" href="/?ui=modern" title="Switch to the Modern Spatial HUD UI">Modern UI ✨</a>
+                <a id="about-btn" class="btn btn-outline-primary ms-2" href="#" title="GeoPort" style="display: none;">About</a>
+                <a id="exit-btn" class="btn btn-outline-primary ms-2" href="#" title="GeoPort" onclick="exitApp()">Exit</a>
+            </div>
+        </div>
+
+       <!-- Toggles for Dark Mode and Fuel Mode -->
+<!-- Toggles for Dark Mode and Fuel Mode -->
+<div class="d-flex flex-column align-items-end mt-3">
+    <div class="form-check form-switch mb-3"> <!-- Add margin-bottom to create space between the switches -->
+        <input class="form-check-input" type="checkbox" role="switch" id="darkModeSwitch" onchange="toggleDarkMode()">
+        <label class="form-check-label" for="darkModeSwitch">Dark Mode</label>
+    </div>
+
+    <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" role="switch" id="enableFuelPrices" onchange="toggleFuelTypeVisibility()">
+        <label class="form-check-label" for="enableFuelPrices">Fuel Mode</label>
+    </div>
+
+</div>
+
+
+        <!-- Connection dropdown hidden for debugging -->
+        <div class="mb-3" style="display: none;">
+            <label for="connection">Connection:</label><br>
+            <div class="row">
+                <div class="col">
+                    <select class="custom-select d-block w-100 glassmorphic-card" id="connection" required>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-3 glassmorphic-card" id="border">
+            <!-- Connect Device -->
+            {% if error_messages %}
+                <button type="button" class="btn" id="connect" onclick="connectDevice()" disabled>
+                    <span id="connectText">Connect Device</span>
+                </button>
+            {% else %}
+                <form>
+                    <div class="mb-3">
+                        <label for="device">Select Device:</label>
+                        <div class="row">
+                            <div class="col">
+                                <select class="custom-select glassmorphic-card" id="device" required></select>
+                            </div>
+                            <div class="col-auto d-flex gap-2">
+                                <button type="button" class="btn" id="refresh" onclick="populateDeviceList()">Refresh</button>
+                                <button type="button" class="btn" id="export-pairing" title="Export .mobiledevicepairing for standalone iOS IPA tools (StikDebug / Locus / LocalDevVPN)" onclick="exportPairingFile()">Export Pairing</button>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+                <button type="button" class="btn" id="connect" onclick="connectDevice()">
+                    <span id="connectText">Connect Device</span>
+                    <span id="spinner" class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display: none;"></span>
+                </button>
+                <button type="button" class="btn btn-danger" id="disconnect" onclick="disconnectDevice()" style="display: none;">Disconnect</button>
+                <input class="form-control glassmorphic-card" type="text" id="rsdData" placeholder="RSD Data…" readonly style="display: none;">
+            {% endif %}
+        </div>
+
+        <div class="mb-3 glassmorphic-card" id="fuelRegionSection" style="display: none;">
+            <label for="fuelRegion">Select Region:</label>
+            <select class="custom-select glassmorphic-card" id="fuelRegion" onchange="handleFuelTypeChange()">
+                <option value="All">All</option>
+                <option value="ACT">ACT</option>
+                <option value="NSW">NSW</option>
+                <option value="QLD">QLD</option>
+                <option value="VIC">VIC</option>
+                <option value="WA">WA</option>
+            </select>
+        </div>
+
+        <div class="mb-3 glassmorphic-card" id="fuelTypeSection" style="display: none;">
+            <label for="fuelType">Select fuel type:</label>
+            <select class="custom-select glassmorphic-card" id="fuelType" onchange="handleFuelSelectionChange()"></select>
+            <p></p>
+            <div class="form-group">
+                <div class="collapse" id="fuelDataCollapse">
+                    <textarea class="form-control glassmorphic-card" id="fuelText" rows="8" readonly disabled></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div id="dataList" class="mb-3 glassmorphic-card"></div>
+<div id="map" class="glassmorphic-card"></div>
+<br>
+<div class="mb-3 glassmorphic-card" id="loc-search">
+    <div class="row align-items-start"> <!-- Align items to the start of the row -->
+        <div class="col-md-auto d-flex align-items-center">
             <label class="mb-0" for="coordinates">Location:</label>
         </div>
-        <div class="col">
-            <input type="text" class="form-control" id="coordinates">
+        <div class="col d-flex align-items-start"> <!-- Align input to the start -->
+            <input type="text" class="form-control glassmorphic-card" id="coordinates">
         </div>
-        <div class="col-md-auto">
-            <button type="button" class="btn btn-primary" id="search" onclick="handleSearch()">Search</button>
+        <div class="col-md-auto d-flex align-items-center justify-content-center">
+            <button type="button" class="btn" id="search" onclick="handleSearch()">Search</button>
         </div>
     </div>
 </div>
 
-<div class="mb-3">
-    <div class="row align-items-center">
-        <div class="col">
-            <button type="button" class="btn btn-primary w-100" data-toggle="popover" id="set-location" disabled onclick="setLocation()">Simulate Location</button>
-        </div>
-        <div class="col">
-            <button type="button" class="btn btn-primary w-100" data-toggle="popover" id="stop-location" disabled onclick="stopLocation()">Stop Location</button>
+
+        <div class="mb-3 glassmorphic-card">
+            <div class="row align-items-center">
+                <div class="col">
+                    <button type="button" class="btn w-100" data-toggle="popover" id="set-location" disabled onclick="setLocation()">Simulate Location</button>
+                </div>
+                <div class="col">
+                    <button type="button" class="btn w-100" data-toggle="popover" id="stop-location" disabled onclick="stopLocation()">Stop Location</button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Centered Buy Me A Coffee button -->
+    <!-- Buy Me A Beer & Community buttons -->
     <div class="row justify-content-center">
-        <div class="col-6 text-center"> <!-- Adjust the column size and add text-center class -->
-            <!-- Your Buy Me A Coffee button code -->
-            <p></p>
-            <a href="https://www.buymeacoffee.com/davesc63">
-                <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20beer&emoji=🍺&slug=davesc63&button_colour=FFDD00&font_colour=000000&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a beer">
+        <div class="col-auto text-center d-flex flex-wrap justify-content-center align-items-center" style="gap: 10px;">
+            <a href="https://buymeacoffee.com/davesc63" target="_blank" rel="noopener" class="glassmorphic-card p-2 d-inline-block">
+                <img src="/static/buy-me-a-beer.svg" alt="Buy me a beer" style="height: 46px; width: auto;">
+            </a>
+            <a href="https://discord.gg/genRca55Nb" target="_blank" rel="noopener" class="glassmorphic-card px-3 py-2 d-inline-flex align-items-center" style="background: #5865F2; color: #ffffff; font-weight: 700; border-radius: 12px; height: 50px; text-decoration: none; gap: 8px;">
+                <i class="fa-brands fa-discord" style="font-size: 20px;"></i> Join Discord
+            </a>
+            <a href="https://refer-nordvpn.com/xapBpLZOcZv" target="_blank" rel="noopener" class="glassmorphic-card px-3 py-2 d-inline-flex align-items-center" style="background: #2E52A3; color: #ffffff; font-weight: 700; border-radius: 12px; height: 50px; text-decoration: none; gap: 8px;">
+                <i class="fa-solid fa-shield-halved" style="font-size: 18px;"></i> Get NordVPN
             </a>
         </div>
     </div>
-</div>
 
+<br>
 
-
-    </div>
-</div>
     <hr>
-Version: {{ app_version_num }}<br>
-Need help? Please see the <a href="https://github.com/davesc63/GeoPort/blob/main/FAQ.md" target="_blank">FAQ</a><br>
-Feedback? Please see the <a href="https://www.surveymonkey.com/r/5LJR2M5" target="_blank">Survey</a>
+    Version: {{ app_version_num }}<br>
+    Need help? Please see the <a href="https://github.com/davesc63/GeoPort/blob/main/FAQ.md" target="_blank">FAQ</a><br>
+    Feedback? Please see the <a href="https://www.surveymonkey.com/r/5LJR2M5" target="_blank">Survey</a>
+
+    <!-- All existing modal codes remain unchanged -->
+    <!-- Keeping all modal divs as they were in original HTML -->
 
 
 
@@ -2725,10 +2984,12 @@ Feedback? Please see the <a href="https://www.surveymonkey.com/r/5LJR2M5" target
     </div>
   </div>
 </div>
+
 <!-- Toast Container -->
-  <div aria-live="polite" aria-atomic="true" style="position: relative; min-height: 200px;">
-    <div class="toast-container position-absolute top-0 end-0 p-3" style="z-index: 9999;"></div>
-  </div>
+<div aria-live="polite" aria-atomic="true" style="position: relative; min-height: 200px;">
+  <div class="toast-container position-absolute top-0 end-0 p-3" style="z-index: 9999;"></div>
+</div>
+
 
 </div>
 

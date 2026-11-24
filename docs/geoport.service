@@ -1,0 +1,21 @@
+# Shipped with the official Ubuntu v5.0.3 zip. Paths below are the upstream
+# layout example. In this repo the entry point is `src/main.py` (see start.fish).
+[Unit]
+Description=GeoPort v5 - Rootless iOS Location Simulator (Userspace RSD)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# NOTE: GeoPort v5 uses pure-Python Userspace RSD Tunnels (pmd-pytcp).
+# Neither root privileges nor /dev/net/tun container passthrough are required!
+# Adjust User/WorkingDirectory/ExecStart to match your host or LXC user.
+WorkingDirectory=/git/geoport-v5
+ExecStart=/git/geoport-v5/venv/bin/python3 /git/geoport-v5/main.py --no-browser --port 54321
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=GEOPORT_BONJOUR_TIMEOUT=4
+
+[Install]
+WantedBy=multi-user.target
