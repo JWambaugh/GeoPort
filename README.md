@@ -199,6 +199,19 @@ Apple requires **Developer Mode** to be enabled on iOS 16+ before location simul
 4. When finished, click **Stop GPS** (or reconnect anytime and click **Stop GPS** to restore real hardware GPS immediately).
 5. **Want 100% Untethered On-Device iOS Simulation?** Read the [**Instruction Guide**](https://geoport.me/guide.html) and [**Register for the iOS Waitlist**](https://geoport.me/ios.html#waitlist)!
 
+### Running from source (macOS)
+
+This fork includes a recovered GeoPort v5.0.3 source tree (see [docs/RECOVERY.md](docs/RECOVERY.md)). Jordan's setup is Homebrew plus the fish shell. Python 3.13 is required.
+
+```fish
+brew install python@3.13
+./start.fish
+```
+
+`start.fish` creates `.venv` in the repo root, sources `.venv/bin/activate.fish`, installs `requirements.txt`, and runs `python src/main.py`. The browser opens `http://localhost:54321`. Pass extra flags through, for example `./start.fish --no-browser` or `./start.fish --self-test`.
+
+`apple-compress` is installed only on macOS (it is not in the Ubuntu build the source was recovered from). Templates and static files live under `src/`, next to the `geoport` package. A headless Linux unit and notes are in `docs/geoport.service` and `docs/LXC-HEADLESS-GUIDE.md`.
+
 ---
 
 ## 🙏 Credits & Tech Stack
