@@ -87,6 +87,7 @@ SOURCE_LABELS = {
     'fallback': 'default 50 km/h',
     'approach': 'off the road',
     'simulate': 'chosen speed',
+    'walk': 'walking pace',
 }
 APPROACH_MAX_KMH = 30.0
 
@@ -713,6 +714,7 @@ def fetch_segments(
     provider: str,
     google_api_key: str,
     http: Any,
+    anchor_end: bool = True,
 ) -> tuple[list[MicroEdge], str]:
     chosen = (provider or 'osrm').strip().lower()
     if chosen == 'google':
@@ -727,7 +729,7 @@ def fetch_segments(
     if val_edges:
         apply_valhalla(segments, val_edges)
     finalize_limits(segments)
-    anchor_endpoints(segments, start, end)
+    anchor_endpoints(segments, start, end, anchor_end=anchor_end)
     return segments, used
 
 
@@ -735,12 +737,15 @@ def anchor_endpoints(
     segments: list[MicroEdge],
     start: tuple[float, float],
     end: tuple[float, float],
+    anchor_end: bool = True,
 ) -> None:
     """Join the clicked pins to the routed roads.
 
     OSRM and Google snap to the driving network, so a pin in a park or a
     building can sit off the first and last road vertices. A short approach
     keeps the drawn route and the moving pin on the points the user chose.
+    A trip that walks into the building passes ``anchor_end=False`` so the
+    drive stops at the road and the walk is a separate leg.
     """
     if not segments:
         return
@@ -756,6 +761,8 @@ def anchor_endpoints(
             limit_kmh=min(first.limit_kmh or APPROACH_MAX_KMH, APPROACH_MAX_KMH),
             source='approach',
         ))
+    if not anchor_end:
+        return
     last = segments[-1]
     gap_end = haversine_m(last.lat2, last.lng2, end[0], end[1])
     if gap_end >= 8.0:
@@ -1350,6 +1357,7 @@ class DriveService:
         self._planned_stops: list[Any] = []
         self._stop_rng: Any = None
         self._on_plan_update: Optional[Callable[[DrivePlan], None]] = None
+        self._preserve_profile = False
 
     def set_plan_listener(self, listener: Optional[Callable[[DrivePlan], None]]) -> None:
         self._on_plan_update = listener
@@ -1367,6 +1375,7 @@ class DriveService:
         google_api_key: str = '',
         include_stops: bool = True,
         stops_seed: Optional[int] = None,
+        anchor_end: bool = True,
     ) -> DrivePlan:
         Coordinate(latitude=start[0], longitude=start[1]).validate()
         Coordinate(latitude=end[0], longitude=end[1]).validate()
@@ -1375,7 +1384,9 @@ class DriveService:
         self.stop()
         if self._lookup is not None:
             self._lookup.cancel()
-        segments, used = fetch_segments(start, end, provider, google_api_key, self._http)
+        segments, used = fetch_segments(
+            start, end, provider, google_api_key, self._http, anchor_end=anchor_end,
+        )
         import random
         from geoport.config import get_geoport_state_dir
         from geoport.services.stops import PLAN_WAIT_S, StopLookup
@@ -1387,6 +1398,7 @@ class DriveService:
             self._planned_stops = []
             self._stop_rng = rng
             self._plan = None
+            self._preserve_profile = False
             self._latest_snapped: list[dict[str, Any]] = []
             self._latest_lookup: dict[str, Any] = {
                 'state': 'pending' if include_stops else 'complete',
@@ -1473,6 +1485,22 @@ class DriveService:
         self._player.load(plan)
         return plan
 
+    def play_plan(self, plan: DrivePlan) -> dict[str, Any]:
+        """Play a finished profile as-is. Walking legs use this so the drive clock is shared."""
+        if self._lookup is not None:
+            self._lookup.cancel()
+            self._lookup = None
+        with self._lock:
+            self._raw = list(plan.segments)
+            self._plan = plan
+            self._provider = plan.provider
+            self._offset = plan.speed_offset_pct
+            self._planned_stops = list(plan.stops or [])
+            self._preserve_profile = True
+            self._user_stop = False
+        self._player.start(plan)
+        return self.status()
+
     def start(self, offset_pct: Optional[float] = None) -> dict[str, Any]:
         with self._lock:
             if not self._raw or self._plan is None:
@@ -1482,15 +1510,19 @@ class DriveService:
             if state not in ('paused', 'playing'):
                 if offset_pct is not None:
                     self._offset = clamp_offset(offset_pct)
-                summary = self._plan.stops_summary if self._plan else None
-                plan = build_profile(
-                    self._raw,
-                    self._offset,
-                    provider=self._provider,
-                    stops=self._planned_stops,
-                    stops_summary=summary,
-                )
-                self._plan = plan
+                if self._preserve_profile and offset_pct is None:
+                    plan = self._plan
+                else:
+                    self._preserve_profile = False
+                    summary = self._plan.stops_summary if self._plan else None
+                    plan = build_profile(
+                        self._raw,
+                        self._offset,
+                        provider=self._provider,
+                        stops=self._planned_stops,
+                        stops_summary=summary,
+                    )
+                    self._plan = plan
             else:
                 plan = self._plan
         if state == 'paused':
@@ -1673,9 +1705,24 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
             if position is not None:
                 position.flush()
         emit('drive_state', service_status)
+        trip = app.extensions['geoport'].get('trip')
+        if trip is not None:
+            try:
+                trip.note_drive_state(state, user_stop=user_stop)
+            except Exception as exc:
+                logger.warning(f'Trip did not accept drive state {state}: {exc}')
 
     service = DriveService(on_sample, on_state=on_state)
-    service.set_plan_listener(lambda plan: emit('drive_plan', {**plan.to_public_dict(), 'updated': True}))
+
+    def _emit_plan(plan: DrivePlan) -> None:
+        payload = plan.to_public_dict()
+        payload['updated'] = True
+        trip = app.extensions['geoport'].get('trip')
+        if trip is not None and getattr(trip, 'owns_drive', False):
+            payload['trip_leg'] = True
+        emit('drive_plan', payload)
+
+    service.set_plan_listener(_emit_plan)
     app.extensions['geoport']['drive'] = service
 
     def _body() -> dict[str, Any]:
@@ -1684,10 +1731,16 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
             raise DriveRouteError('JSON object expected')
         return data
 
+    def _yield_trip() -> None:
+        trip = app.extensions['geoport'].get('trip')
+        if trip is not None and getattr(trip, 'active', False):
+            trip.stop(user=True)
+
     @app.route('/api/drive/route', methods=['POST'])
     def drive_route() -> Any:
         try:
             body = _body()
+            _yield_trip()
             start = _parse_latlng(body.get('start'), 'start')
             end = _parse_latlng(body.get('end'), 'end')
             offset = float(body.get('speed_offset_pct', 0))

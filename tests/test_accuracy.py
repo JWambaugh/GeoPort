@@ -211,7 +211,7 @@ class AutomationApiTests(unittest.TestCase):
             def cancel(self):
                 return None
 
-        def fake(start, end, provider, google_api_key, http):
+        def fake(start, end, provider, google_api_key, http, anchor_end=True):
             calls.append((start, end))
             segments = drive_mod.segments_from_points(
                 [start, end],

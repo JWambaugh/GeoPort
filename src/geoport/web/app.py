@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from geoport.services.autoconnect import AutoConnect, choose_device, should_reconnect
 from geoport.services.control import register_control_api
 from geoport.services.drive import register_drive_routes
+from geoport.services.trip import TripService, reconnect_drive_state, register_trip_routes
 from geoport.services.fuel import FuelService
 from geoport.services.position import PositionService
 from geoport.services.gpx import GPXService
@@ -97,6 +98,13 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         'meta_svc': meta,
         'position': position}
     register_drive_routes(app, rt, sess, emit_socket_event)
+    trip = TripService(
+        app.extensions['geoport']['drive'],
+        position=position,
+        emit=emit_socket_event,
+    )
+    app.extensions['geoport']['trip'] = trip
+    register_trip_routes(app, trip)
     register_control_api(app, rt, sess, dev_scanner, position, app.extensions['geoport']['drive'], emit_socket_event)
 
     def _on_fix(fix: dict[str, Any]) -> None:
@@ -155,7 +163,10 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
             return
         try:
             connected = bool(sess.snapshot.connected)
-            drive_state = app.extensions['geoport']['drive'].player.state
+            drive_state = reconnect_drive_state(
+                app.extensions['geoport']['drive'].player.state,
+                app.extensions['geoport']['trip'].state,
+            )
             if not force and not should_reconnect(
                 connected=connected,
                 user_hold=autoconnect.user_hold,
@@ -250,6 +261,7 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
             'position': reported,
             'accuracy_m': fix.get('accuracy_m') or 0,
             'drive': app.extensions['geoport']['drive'].status(),
+            'trip': app.extensions['geoport']['trip'].summary(),
             'reconnecting': autoconnect.reconnecting,
             'last_disconnect_at': autoconnect.last_disconnect_at,
             'reconnect_attempts': autoconnect.reconnect_attempts})
@@ -529,6 +541,12 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         def _graceful_stop() -> None:
             drive = app.extensions['geoport'].get('drive')
             tracked = app.extensions['geoport'].get('position')
+            trip_svc = app.extensions['geoport'].get('trip')
+            if trip_svc is not None:
+                try:
+                    trip_svc.close()
+                except Exception:
+                    pass
             if drive is not None:
                 try:
                     drive.stop()
@@ -566,5 +584,8 @@ def create_app(runtime: Optional[AsyncRuntime] = None, session_mgr: Optional[Dev
         return jsonify({
             'success': True,
             'message': 'GeoPort server is shutting down...'})
+
+    if os.getenv('GEOPORT_TRIP_RESUME', '1').strip().lower() not in ('0', 'false', 'no', 'off'):
+        threading.Thread(target=trip.maybe_resume, name='geoport-trip-resume', daemon=True).start()
 
     return (app, socketio)

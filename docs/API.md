@@ -40,8 +40,9 @@ curl -sS "$GEOPORT_URL/api/v1/status"
 
 `connected`, `simulating`, `device` (udid, name), `position` (`lat`, `lng`,
 `source`, `updated_at`, or `null`), `accuracy_m`, `drive` (state, progress,
-remaining seconds, speed, stop counts), and the reconnect fields
-`reconnecting`, `last_disconnect_at`, and `reconnect_attempts`.
+remaining seconds, speed, stop counts), `trip` (state, phase, detail, dwell
+remaining, ETA), and the reconnect fields `reconnecting`,
+`last_disconnect_at`, and `reconnect_attempts`.
 
 ## teleport
 
@@ -114,6 +115,126 @@ lists each piece. Failures are not cached. A successful chunk is stored in
 
 After pause, stop, or arrival, `status.position` is the fix at that moment,
 not the original start.
+
+## trip
+
+A trip is an ordered list of stops. The first leg starts at the current
+simulated position unless `from` is set. Each stop is reached by `mode`
+`drive` (default) or `walk`. `dwell_minutes` may be 0. `waypoint: true` is a
+pass-through pin: no dwell and no walk inside. `go_inside` defaults to true
+on a drive stop. On arrival the car stops at the road or parking point, then
+the position walks off-road at about 1.3 m/s to the place, dwells there, and
+walks back to the car before the next drive. A walk leg uses an OSRM foot
+route, then Valhalla's pedestrian profile, then a straight line. Walks do
+not stop for signs or signals. `walk_speed_mps` changes the pace (default
+1.3). Long walks vary that pace slightly and may take one short pause.
+
+Drive legs still use the speed-limit player, including stop signs and
+signals unless `include_stops` is false. The plan's per-stop `travel_s`
+includes the walk into the store, the walk back to the car, and the expected
+signal delay. `arrive_at` and `depart_at` are clock times. `eta_s` is the
+time until the last stop is finished.
+
+```bash
+curl -sS -H 'Content-Type: application/json' \
+  -d '{"stops":[
+        {"address":"Target, Grass Valley","dwell_minutes":20},
+        {"lat":39.219,"lng":-121.061,"dwell_minutes":5,"mode":"walk","label":"Lot"},
+        {"lat":39.220,"lng":-121.063,"dwell_minutes":0,"mode":"walk","waypoint":true},
+        {"address":"Costco, Grass Valley","dwell_minutes":40,"go_inside":false}
+      ],"include_stops":true,"speed_offset_pct":0,"walk_speed_mps":1.3}' \
+  "$GEOPORT_URL/api/v1/trip"
+
+curl -sS "$GEOPORT_URL/api/v1/trip"
+./scripts/geoportctl trip --stop "Target, Grass Valley" 20 \
+  --walk "39.219,-121.061" 5 --pin 39.220,-121.063 0 \
+  --stop "Costco, Grass Valley" 40
+./scripts/geoportctl trip --file trip.json --no-start
+./scripts/geoportctl trip status
+./scripts/geoportctl trip pause
+./scripts/geoportctl trip resume
+./scripts/geoportctl trip skip
+./scripts/geoportctl trip stop
+```
+
+`start: false` only plans. Omit it, or send `start: true`, to leave
+immediately. `--pin lat,lng 0` and `--walk … 0` are pass-through waypoints.
+`--park` before a `--stop` waits in the car instead of walking inside.
+`--walk-speed 1.4` sets the pace. The map UI calls the same handlers at
+`/api/trip`, which is not limited to loopback.
+
+Pause freezes the drive clock and the dwell clock. Skip finishes the current
+drive, walk, or dwell and continues with the next step. Stop cancels
+playback and keeps the stop list.
+
+```bash
+curl -sS -X PATCH -H 'Content-Type: application/json' \
+  -d '{"stops":[{"lat":39.22,"lng":-121.06,"dwell_minutes":15,"label":"Target"}]}' \
+  "$GEOPORT_URL/api/v1/trip/stops"
+```
+
+`POST` or `PATCH /api/v1/trip/stops` replaces the stops that are not finished
+yet. Dwell, order, mode, and destination can change while the trip is
+running. The current leg is replanned from the simulated position when its
+destination changes.
+
+Each stop keeps a stable `id`. Edit one stop with
+`PATCH /api/v1/trip/stops/{id}` or `PATCH /api/v1/trip/stops/{n}` where `n`
+is the 1-based pin number. A finished stop is rejected. A stop you have
+already arrived at can still change its label and dwell. `DELETE` on the
+same path removes it. `"move": "up"` or `"down"` reorders it among the stops
+that are not finished.
+
+```bash
+curl -sS -X PATCH -H 'Content-Type: application/json' \
+  -d '{"dwell_minutes":30,"mode":"walk","to":"Costco, Grass Valley"}' \
+  "$GEOPORT_URL/api/v1/trip/stops/2"
+
+./scripts/geoportctl trip edit 2 --dwell 30 --to "Costco, Grass Valley" --mode walk
+./scripts/geoportctl trip edit 2 --label "Lot" --park --up
+./scripts/geoportctl trip edit 2 --delete
+```
+
+A stop has two separate choices. **Arrival** is how you get there: `go_inside: true` walks from the parked car to the place at about 1.3 m/s and walks back to the car when you leave; `go_inside: false` stays in the car. **Dwell** is what the pin does while the minutes run: `dwell_mode: "still"` stands still, and `dwell_mode: "wander"` walks a gentle random path at `wander_mps` inside `wander_radius_m` meters of the stop. The wander never jumps farther than speed × time.
+
+A walk leg follows footpaths unless `direct: true` or `route: "straight"`. That draws and walks a straight line and does not call the foot router. `route: "path"` is the default.
+
+A drive between two stops that are already the same place (or a router reply of no drivable length) is not a failure. The car stays put, and a walk-inside leg still runs when you asked for one.
+
+Clicking a stop in the Trip card flies the map to that pin. If the map is zoomed out it comes in to street level; if it is already close it keeps the zoom. That counts as you moving the map, so the fit-to-trip does not snap the view back.
+
+The Trip card routes as you edit. `POST /api/v1/trip/preview` (and `/api/trip/preview`)
+draws the legs without waiting for stop signs or signals. Each leg is cached
+by its mode, endpoints, straight-line choice, and go-inside choice, so an unchanged leg is not
+asked of the router again. The server emits `trip_preview` after each leg,
+and `trip` when the draft is saved. Sign and signal lookup still runs when
+you Plan or Start. The map fits the trip unless you have panned, or opened a stop, in the last
+few seconds.
+
+```bash
+./scripts/geoportctl trip --walk-direct "39.22,-121.07" 5 --wander 0.6 --radius 25
+./scripts/geoportctl trip edit 2 --wander 0.6 --radius 25
+./scripts/geoportctl trip edit 2 --still
+./scripts/geoportctl trip edit 2 --direct
+./scripts/geoportctl trip edit 2 --path
+```
+
+The trip is stored in `~/.geoport/trip.json`. If it was playing or paused
+when GeoPort stops, the next launch continues from the current simulated
+position. A dropped device does not pause the trip clock; auto-reconnect
+keeps retrying through drives and dwells. `status.trip` is a short summary:
+state, phase, the "Dwelling at …" line, dwell remaining, and ETA.
+
+Named trips live in `~/.geoport/trips.json`.
+
+```bash
+./scripts/geoportctl trip save errands
+./scripts/geoportctl trip library
+./scripts/geoportctl trip load errands
+curl -sS -H 'Content-Type: application/json' \
+  -d '{"name":"errands","start":false}' \
+  "$GEOPORT_URL/api/v1/trip/library/load"
+```
 
 ## accuracy
 
