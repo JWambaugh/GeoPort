@@ -93,9 +93,17 @@ the Drive card. `start: false` only plans. `stops` defaults to true. Set
 counts `stop_signs` and `signals`. `eta_s` adds the expected signal wait
 (45% of signals, mean 25 s). Playback uses the rolled waits, so a red light
 is a real stop of 5–45 s and a green light is only a slight slowdown.
-`stop_markers` are the points drawn on the map. If Overpass does not
-answer, the route is still returned and `stops.note` says the lookup was
-skipped.
+`stop_markers` are the points drawn on the map. A long route is queried in
+chunks of about 4 km. Mirrors are rotated (`overpass.openstreetmap.fr` was
+live when this was written; `overpass-api.de`, `overpass.kumi.systems`,
+`overpass.private.coffee`, and the Mail.ru endpoint stay in the list) with
+a 25 second timeout and a backoff after HTTP 429, 5xx, or a timeout.
+Planning waits about 3.5 seconds, then the drive can start. Chunks that are
+still running finish in the background; stops still ahead of the car are
+added to playback and `drive_plan` is sent again. `stops.lookup.state` is
+`pending`, `partial`, `complete`, or `failed`, and `stops.lookup.chunks`
+lists each piece. Failures are not cached. A successful chunk is stored in
+`~/.geoport/stops_cache`, keyed by its bbox rounded to 0.01 degrees.
 
 ```bash
 ./scripts/geoportctl pause

@@ -384,8 +384,8 @@ class HttpPlanningTests(unittest.TestCase):
 
 class StopAndReconnectTests(unittest.TestCase):
     def test_overpass_nodes_are_snapped_filtered_and_clustered(self) -> None:
-        from geoport.services.stops import _CACHE, fetch_route_controls, parse_control_elements, snap_controls
-        _CACHE.clear()
+        import tempfile
+        from geoport.services.stops import fetch_route_controls, parse_control_elements, snap_controls
         segments = _straight(50, 50, 1000, 1000)
         on_route = _move(0, 0, north_m=400)
         beside = _move(on_route[0], on_route[1], east_m=8)
@@ -415,7 +415,8 @@ class StopAndReconnectTests(unittest.TestCase):
             def post(self, *args, **kwargs):
                 raise TimeoutError('overpass down')
 
-        found, note = fetch_route_controls(segments, Boom())
+        with tempfile.TemporaryDirectory() as tmp:
+            found, note = fetch_route_controls(segments, Boom(), cache_dir=Path(tmp), sleeper=lambda _s: None)
         self.assertEqual(found, [])
         self.assertIn('unavailable', note or '')
 
@@ -434,9 +435,13 @@ class StopAndReconnectTests(unittest.TestCase):
                 calls['n'] += 1
                 return FakeResponse(payload)
 
-        _CACHE.clear()
-        first, first_note = fetch_route_controls(segments, FakeHttp())
-        second, second_note = fetch_route_controls(segments, FakeHttp())
+        with tempfile.TemporaryDirectory() as tmp:
+            first, first_note = fetch_route_controls(
+                segments, FakeHttp(), cache_dir=Path(tmp), sleeper=lambda _s: None,
+            )
+            second, second_note = fetch_route_controls(
+                segments, FakeHttp(), cache_dir=Path(tmp), sleeper=lambda _s: None,
+            )
         self.assertIsNone(first_note)
         self.assertIsNone(second_note)
         self.assertEqual(calls['n'], 1)
@@ -483,6 +488,105 @@ class StopAndReconnectTests(unittest.TestCase):
         self.assertTrue(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='playing', has_last_udid=False, startup=False))
         self.assertTrue(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='idle', has_last_udid=False, startup=True))
         self.assertFalse(should_reconnect(connected=False, user_hold=False, has_position=False, drive_state='idle', has_last_udid=False, startup=False))
+
+    def test_mirrors_rotate_chunks_split_and_failures_are_not_cached(self) -> None:
+        import tempfile
+        from geoport.services.stops import REQUEST_TIMEOUT, StopLookup, _BACKOFF_S, _bbox_query, query_mirrors, split_route_chunks
+        route = _straight(80, 80, 5000, 5000)
+        self.assertGreaterEqual(len(split_route_chunks(route)), 2)
+
+        class Response:
+            def __init__(self, status, body=None):
+                self.status_code = status
+                self._body = body or {'elements': []}
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(f'HTTP {self.status_code}')
+            def json(self):
+                return self._body
+
+        seen = []
+
+        class Rotating:
+            def post(self, url, **kwargs):
+                seen.append(url)
+                if url.endswith('/bad'):
+                    return Response(502)
+                if url.endswith('/slow'):
+                    raise TimeoutError('timed out')
+                return Response(200, {'elements': []})
+
+        payload = query_mirrors(
+            Rotating(),
+            '[out:json][timeout:25];',
+            ['http://mirror/bad', 'http://mirror/slow', 'http://mirror/good'],
+            backoff=(0, 0, 0),
+            sleeper=lambda _s: None,
+        )
+        self.assertEqual(payload, {'elements': []})
+        self.assertEqual(seen, ['http://mirror/bad', 'http://mirror/slow', 'http://mirror/good'])
+        self.assertEqual(REQUEST_TIMEOUT[1], 25.0)
+        self.assertGreaterEqual(_BACKOFF_S[-1], 1.0)
+        self.assertIn('[timeout:25]', _bbox_query((0.0, 0.0, 0.1, 0.1)))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            class Fail:
+                def post(self, url, **kwargs):
+                    return Response(429)
+            lookup = StopLookup(route, Fail(), Path(tmp), mirrors=['http://mirror/bad'], sleeper=lambda _s: None)
+            lookup.start()
+            lookup.wait(2)
+            lookup.join(1)
+            self.assertEqual(lookup.lookup_state()['state'], 'failed')
+            self.assertEqual(list(Path(tmp).glob('*.json')), [])
+
+    def test_late_stop_ahead_is_inserted_without_moving_the_car(self) -> None:
+        import random
+        from geoport.services.drive import DriveService
+        segments = _straight(60, 60, 4000, 4000)
+        plan = build_profile(segments, 0)
+        service = DriveService(lambda _sample: None, sleeper=lambda _s: None)
+        try:
+            service._raw = segments
+            service._offset = 0
+            service._provider = 'osrm'
+            service._plan = plan
+            service._player.load(plan)
+            service._player._elapsed = 25.0
+            before = position_at(plan, 25.0)
+            service._stop_rng = random.Random(3)
+            service._planned_stops = []
+            service._latest_snapped = [
+                {'kind': 'stop_sign', 'distance_m': 80, 'lat': 0, 'lng': 0},
+                {'kind': 'stop_sign', 'distance_m': 5500, 'lat': 0.05, 'lng': 0},
+            ]
+            service._latest_lookup = {
+                'state': 'partial',
+                'chunks': [
+                    {'id': 0, 'state': 'ok', 'bbox': [0, 0, 1, 1], 'stops': 1, 'error': None},
+                    {'id': 1, 'state': 'pending', 'bbox': [1, 0, 2, 1], 'stops': 0, 'error': None},
+                ],
+                'note': 'Still looking up stop signs',
+            }
+            service._lock.acquire()
+            try:
+                updated = service._rebuild(initial=False)
+            finally:
+                service._lock.release()
+            after = position_at(updated, 25.0)
+            self.assertAlmostEqual(after.distance_m, before.distance_m, delta=8)
+            self.assertAlmostEqual(after.lat, before.lat, delta=1e-4)
+            distances = [stop.distance_m for stop in service._planned_stops]
+            self.assertTrue(any(distance > 5000 for distance in distances))
+            self.assertFalse(any(distance < 200 for distance in distances))
+            self.assertEqual(updated.stops_summary['lookup']['state'], 'partial')
+            held = [
+                sample for sample in iter_samples(updated, 0.5)
+                if abs(sample.distance_m - 5500) < 40 and sample.speed_kmh < 1.2
+            ]
+            self.assertGreater(len(held), 2)
+        finally:
+            service.close()
 
 
 if __name__ == '__main__':

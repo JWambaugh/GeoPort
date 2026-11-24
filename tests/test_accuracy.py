@@ -195,9 +195,21 @@ class AutomationApiTests(unittest.TestCase):
 
     def test_chained_drive_plans_use_the_latest_fix(self) -> None:
         import geoport.services.drive as drive_mod
+        import geoport.services.stops as stops_mod
         calls = []
         original = drive_mod.fetch_segments
         original_controls = drive_mod._controls_for
+        original_lookup = stops_mod.StopLookup
+
+        class ImmediateLookup:
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self, on_update=None):
+                return None
+            def wait(self, budget_s):
+                return [], {'state': 'complete', 'chunks': [], 'note': None}
+            def cancel(self):
+                return None
 
         def fake(start, end, provider, google_api_key, http):
             calls.append((start, end))
@@ -216,6 +228,7 @@ class AutomationApiTests(unittest.TestCase):
 
         drive_mod.fetch_segments = fake
         drive_mod._controls_for = no_stops
+        stops_mod.StopLookup = ImmediateLookup
         try:
             self.client.post('/api/accuracy', json={'meters': 0})
             first = self.client.post('/api/v1/teleport', json={'lat': -27.5, 'lng': 153.0})
@@ -240,6 +253,7 @@ class AutomationApiTests(unittest.TestCase):
         finally:
             drive_mod.fetch_segments = original
             drive_mod._controls_for = original_controls
+            stops_mod.StopLookup = original_lookup
 
     def test_connect_endpoint_runs_the_watchdog_hook(self) -> None:
         called = []

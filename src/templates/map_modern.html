@@ -1622,6 +1622,7 @@
             const signals = Number(stops.signals || 0);
             const bits = [];
             if (signs || signals) bits.push(`${signs} stop sign${signs === 1 ? '' : 's'} · ${signals} signal${signals === 1 ? '' : 's'}`);
+            if (stops.lookup && stops.lookup.state && stops.lookup.state !== 'complete') bits.push('lookup ' + stops.lookup.state);
             if (stops.note) bits.push(stops.note);
             return bits.join(' · ');
         }

@@ -1139,6 +1139,11 @@ class DrivePlayer:
             self._state = 'idle'
             self._arm = False
 
+    def replace_plan(self, plan: DrivePlan) -> None:
+        """Swap in a profile that adds stops ahead. The clock is left where it is."""
+        with self._lock:
+            self._plan = plan
+
     def start(self, plan: DrivePlan) -> None:
         """Begin at t=0. The worker emits the first sample so ticks stay ordered."""
         with self._lock:
@@ -1341,6 +1346,13 @@ class DriveService:
         self._offset = 0.0
         self._last_speed_kmh = None
         self._user_stop = False
+        self._lookup = None
+        self._planned_stops: list[Any] = []
+        self._stop_rng: Any = None
+        self._on_plan_update: Optional[Callable[[DrivePlan], None]] = None
+
+    def set_plan_listener(self, listener: Optional[Callable[[DrivePlan], None]]) -> None:
+        self._on_plan_update = listener
 
     @property
     def player(self) -> DrivePlayer:
@@ -1361,16 +1373,90 @@ class DriveService:
         if haversine_m(start[0], start[1], end[0], end[1]) < 15:
             raise DriveRouteError('Start and destination are the same place')
         self.stop()
+        if self._lookup is not None:
+            self._lookup.cancel()
         segments, used = fetch_segments(start, end, provider, google_api_key, self._http)
-        planned, summary = _controls_for(segments, self._http, include_stops, stops_seed)
-        plan = build_profile(segments, offset_pct, provider=used, stops=planned, stops_summary=summary)
+        import random
+        from geoport.config import get_geoport_state_dir
+        from geoport.services.stops import PLAN_WAIT_S, StopLookup
+        rng = random.Random(stops_seed) if stops_seed is not None else random.Random()
         with self._lock:
             self._raw = segments
-            self._plan = plan
             self._provider = used
-            self._offset = plan.speed_offset_pct
-        self._player.load(plan)
+            self._offset = clamp_offset(offset_pct)
+            self._planned_stops = []
+            self._stop_rng = rng
+            self._plan = None
+            self._latest_snapped: list[dict[str, Any]] = []
+            self._latest_lookup: dict[str, Any] = {
+                'state': 'pending' if include_stops else 'complete',
+                'chunks': [],
+                'note': None if include_stops else 'Stops disabled',
+            }
+        if include_stops:
+            lookup = StopLookup(segments, self._http, get_geoport_state_dir() / 'stops_cache')
+            self._lookup = lookup
+            lookup.start(self._on_stops)
+            snapped, state = lookup.wait(PLAN_WAIT_S)
+            with self._lock:
+                self._latest_snapped = snapped
+                self._latest_lookup = state
+        else:
+            self._lookup = None
+        plan = self._rebuild(initial=True)
         return plan
+
+    def _on_stops(self, snapped: list[dict[str, Any]], lookup: dict[str, Any]) -> None:
+        with self._lock:
+            self._latest_snapped = snapped
+            self._latest_lookup = lookup
+            if self._plan is None:
+                return
+            plan = self._rebuild(initial=False)
+        if self._on_plan_update is not None and plan is not None:
+            self._on_plan_update(plan)
+
+    def _rebuild(self, initial: bool) -> DrivePlan:
+        """Caller holds ``_lock`` when initial is False. Initial acquires it."""
+        if initial:
+            self._lock.acquire()
+        try:
+            from geoport.services.stops import assign_dwells, summarize_stops
+            current_d = 0.0
+            if self._plan is not None and self._player.elapsed > 0:
+                current_d = position_at(self._plan, self._player.elapsed).distance_m
+            known = {round(float(stop.distance_m), 1) for stop in self._planned_stops}
+            fresh = []
+            for item in self._latest_snapped:
+                key = round(float(item['distance_m']), 1)
+                if key in known or float(item['distance_m']) <= current_d + 20.0:
+                    continue
+                fresh.append(item)
+                known.add(key)
+            if fresh and self._stop_rng is not None:
+                self._planned_stops.extend(assign_dwells(fresh, self._stop_rng))
+            summary = summarize_stops(
+                self._planned_stops,
+                self._latest_lookup.get('state') != 'failed',
+                self._latest_lookup.get('note'),
+            )
+            summary['lookup'] = self._latest_lookup
+            plan = build_profile(
+                self._raw,
+                self._offset,
+                provider=self._provider,
+                stops=self._planned_stops,
+                stops_summary=summary,
+            )
+            self._plan = plan
+            if initial:
+                self._player.load(plan)
+            else:
+                self._player.replace_plan(plan)
+            return plan
+        finally:
+            if initial:
+                self._lock.release()
 
     def load_segments(
         self,
@@ -1396,8 +1482,17 @@ class DriveService:
             if state not in ('paused', 'playing'):
                 if offset_pct is not None:
                     self._offset = clamp_offset(offset_pct)
-                plan = build_profile(self._raw, self._offset, provider=self._provider)
+                summary = self._plan.stops_summary if self._plan else None
+                plan = build_profile(
+                    self._raw,
+                    self._offset,
+                    provider=self._provider,
+                    stops=self._planned_stops,
+                    stops_summary=summary,
+                )
                 self._plan = plan
+            else:
+                plan = self._plan
         if state == 'paused':
             self._player.resume()
         elif state == 'playing':
@@ -1425,6 +1520,8 @@ class DriveService:
         return flag
 
     def close(self) -> None:
+        if self._lookup is not None:
+            self._lookup.cancel()
         self._player.close()
 
     def status(self) -> dict[str, Any]:
@@ -1578,6 +1675,7 @@ def register_drive_routes(app: Any, runtime: Any, session: Any, emit: Callable[[
         emit('drive_state', service_status)
 
     service = DriveService(on_sample, on_state=on_state)
+    service.set_plan_listener(lambda plan: emit('drive_plan', {**plan.to_public_dict(), 'updated': True}))
     app.extensions['geoport']['drive'] = service
 
     def _body() -> dict[str, Any]:
