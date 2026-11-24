@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 from geoport.services.drive import (  # noqa: E402
     EARTH_RADIUS_M,
+    DriveRouteError,
     build_profile,
     haversine_m,
     iter_samples,
@@ -24,7 +25,11 @@ from geoport.services.trip import (  # noqa: E402
     fetch_walk_points,
     reconnect_drive_state,
 )
-from geoport.services.trip import TripService, register_trip_routes  # noqa: E402
+from geoport.services.trip import (  # noqa: E402
+    TripService,
+    advance_wander,
+    register_trip_routes,
+)
 
 
 def _move(lat: float, lng: float, north_m: float = 0.0, east_m: float = 0.0) -> tuple[float, float]:
@@ -176,6 +181,10 @@ class WalkGeometryTests(unittest.TestCase):
         samples = [sample for sample in iter_samples(plan, 0.5) if not sample.finished and sample.speed_mps > 0.2]
         self.assertGreater(len(samples), 20)
         self.assertAlmostEqual(sum(sample.speed_mps for sample in samples) / len(samples), WALK_MPS, delta=0.05)
+        ticks = list(iter_samples(plan, 0.25))
+        for left, right in zip(ticks, ticks[1:]):
+            step = haversine_m(left.lat, left.lng, right.lat, right.lng)
+            self.assertLessEqual(step, WALK_MPS * 0.25 + 0.05)
 
     def test_speed_varies_and_a_long_walk_can_pause(self) -> None:
         start = (39.0, -121.0)
@@ -370,6 +379,7 @@ class TripPlanTests(unittest.TestCase):
         self.assertGreater(status['stops'][1]['walk_s'], 0)
 
     def test_playback_walks_inside_then_dwells_and_pause_freezes_the_clock(self) -> None:
+        self.position.set_accuracy(12)
         self.trip.plan_body(self._body(start=True))
         self.assertEqual(self.trip.phase, 'drive')
         self.assertEqual(self.drive.calls[0][:3], ('plan', True, False))
@@ -380,7 +390,7 @@ class TripPlanTests(unittest.TestCase):
         self.trip.note_drive_state('finished')
         self.assertEqual(self.trip.phase, 'dwell')
         self.assertIn('Dwelling at Target', self.trip.status()['detail'])
-        self.assertEqual(self.position.snapshot()['accuracy_m'], 12)
+        self.assertEqual(self.position.snapshot()['accuracy_m'], 0)
         self.clock.t += 15
         self.trip.pause()
         self.assertEqual(self.trip.state, 'paused')
@@ -514,6 +524,146 @@ class TripPlanTests(unittest.TestCase):
         self.assertEqual(reconnect_drive_state('idle', 'paused'), 'paused')
         self.assertEqual(reconnect_drive_state('playing', 'idle'), 'playing')
 
+    def test_same_place_drive_stays_put_and_still_walks_inside(self) -> None:
+        def router(start, end, include_stops, offset):
+            self.drive_calls.append((include_stops, offset, start, end))
+            if haversine_m(start[0], start[1], end[0], end[1]) < 50:
+                raise DriveRouteError('OSRM route has no drivable length')
+            road = _short(start, end, 30)
+            plan = build_profile(segments_from_points([start, road], [40]), 0, provider='osrm')
+            return plan, road
+
+        self.trip._drive_router = router
+        body = self._body()
+        body['stops'] = [
+            {
+                'lat': self.target[0], 'lng': self.target[1], 'label': 'Target lot',
+                'dwell_minutes': 10, 'mode': 'drive', 'go_inside': False,
+            },
+            {
+                'lat': self.target[0], 'lng': self.target[1], 'label': 'Target inside',
+                'dwell_minutes': 20, 'mode': 'drive', 'go_inside': True,
+            },
+        ]
+        status = self.trip.preview_body(body)
+        self.assertEqual(status['stop_count'], 2)
+        inside = status['stops'][1]
+        self.assertEqual(inside['drive_s'], 0)
+        self.assertGreater(inside['walk_in_s'], 10)
+        self.assertFalse(any(part['role'] == 'drive' for part in inside['parts']))
+        self.assertTrue(any(part['role'] == 'walk_in' for part in inside['parts']))
+
+        def refuse(*_args, **_kwargs):
+            raise AssertionError('router should not run')
+
+        self.trip._drive_router = refuse
+        near = {
+            'from': {'lat': self.target[0], 'lng': self.target[1]},
+            'start': False,
+            'walk_variation': 0,
+            'stops': [{
+                'lat': self.target[0], 'lng': self.target[1], 'label': 'Here',
+                'dwell_minutes': 5, 'mode': 'drive', 'go_inside': True, 'dwell_mode': 'still',
+            }],
+        }
+        parked = self.trip.preview_body(near)
+        self.assertEqual(parked['stops'][0]['drive_s'], 0)
+        self.assertEqual(parked['stops'][0]['walk_in_s'], 0)
+        self.assertEqual(parked['stops'][0]['dwell_mode'], 'still')
+
+        self.trip._drive_router = router
+        original = self.drive.plan
+
+        def raising_plan(start, end, **kwargs):
+            if haversine_m(start[0], start[1], end[0], end[1]) < 50:
+                raise DriveRouteError('OSRM route has no drivable length')
+            return original(start, end, **kwargs)
+
+        self.drive.plan = raising_plan
+        started = self.trip.plan_body({**body, 'start': True})
+        self.assertEqual(started['state'], 'playing')
+        self.trip.skip()
+        self.assertEqual(self.trip.phase, 'dwell')
+        self.trip.skip()
+        self.assertEqual(self.trip.state, 'playing')
+        self.assertEqual(self.trip.phase, 'walk_in')
+        self.assertFalse(self.trip.status().get('error'))
+
+    def test_direct_walk_skips_the_foot_router(self) -> None:
+        body = self._body()
+        body['stops'][1]['direct'] = True
+        body['stops'][1]['route'] = 'straight'
+        status = self.trip.preview_body(body)
+        straight = status['stops'][1]
+        self.assertTrue(straight['direct'])
+        self.assertEqual(straight['route'], 'straight')
+        self.assertEqual(straight['parts'][0]['provider'], 'straight')
+        self.assertEqual(len(self.walk_calls), 1)
+        routed = status['stops'][2]
+        self.assertFalse(routed['direct'])
+        self.assertEqual(routed['parts'][0]['provider'], 'osrm-foot')
+
+    def test_wander_stays_inside_the_radius_and_still_does_not_move(self) -> None:
+        body = self._body(start=True)
+        body['stops'] = [{
+            'lat': self.target[0], 'lng': self.target[1], 'label': 'Target',
+            'dwell_minutes': 20, 'mode': 'drive', 'go_inside': True,
+            'dwell_mode': 'still',
+        }]
+        self.trip.plan_body(body)
+        self.trip.skip()
+        if self.trip.phase == 'walk_in':
+            self.trip.skip()
+        self.assertEqual(self.trip.phase, 'dwell')
+        anchor = self.position.snapshot()
+        self.clock.t += 2
+        self.trip.tick()
+        held = self.position.snapshot()
+        self.assertAlmostEqual(held['lat'], anchor['lat'], places=6)
+        self.assertAlmostEqual(held['lng'], anchor['lng'], places=6)
+        self.assertEqual(held['accuracy_m'], 0)
+
+        self.trip.stop()
+        self.position.note(self.origin[0], self.origin[1], source='set')
+        wandering = self._body(start=True)
+        wandering['walk_seed'] = 3
+        wandering['stops'] = [{
+            'lat': self.target[0], 'lng': self.target[1], 'label': 'Target',
+            'dwell_minutes': 20, 'mode': 'drive', 'go_inside': True,
+            'dwell_mode': 'wander', 'wander_mps': 0.5, 'wander_radius_m': 25,
+        }]
+        self.trip.plan_body(wandering)
+        self.trip.skip()
+        if self.trip.phase == 'walk_in':
+            self.trip.skip()
+        self.assertEqual(self.trip.phase, 'dwell')
+        points = [self.position.snapshot()]
+        for _ in range(40):
+            self.clock.t += 0.25
+            self.trip.tick()
+            points.append(self.position.snapshot())
+        center = (self.target[0], self.target[1])
+        moved = 0.0
+        for left, right in zip(points, points[1:]):
+            step = haversine_m(left['true_lat'], left['true_lng'], right['true_lat'], right['true_lng'])
+            self.assertLessEqual(step, 0.5 * 0.25 + 0.02)
+            moved += step
+            self.assertLessEqual(haversine_m(center[0], center[1], right['true_lat'], right['true_lng']), 25.1)
+            self.assertEqual(right['accuracy_m'], 0)
+        self.assertGreater(moved, 1.0)
+
+    def test_a_huge_wander_tick_does_not_teleport(self) -> None:
+        north, east, heading, turn = 0.0, 0.0, 10.0, 0.0
+        rng = __import__('random').Random(1)
+        for _ in range(80):
+            prev = (north, east)
+            north, east, heading, turn = advance_wander(
+                north, east, heading, turn, dt_s=30.0, speed_mps=0.6, radius_m=25, rng=rng,
+            )
+            step = math.hypot(north - prev[0], east - prev[1])
+            self.assertLessEqual(step, 0.6 * 0.5 + 1e-6)
+            self.assertLessEqual(math.hypot(north, east), 25.01)
+
 
 class TripApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -636,6 +786,20 @@ class TripApiTests(unittest.TestCase):
         self.assertEqual(edited.get_json()['stops'][1]['dwell_minutes'], 30)
         self.assertEqual(edited.get_json()['stops'][1]['id'], 'bbb')
         self.assertEqual(len(self.drive_calls), calls_before)
+        wandered = self.client.patch('/api/v1/trip/stops/bbb', json={
+            'dwell_mode': 'wander',
+            'wander_mps': 0.6,
+            'wander_radius_m': 25,
+        })
+        self.assertEqual(wandered.status_code, 200, wandered.get_json())
+        self.assertEqual(wandered.get_json()['stops'][1]['dwell_mode'], 'wander')
+        self.assertEqual(wandered.get_json()['stops'][1]['wander_mps'], 0.6)
+        self.assertEqual(wandered.get_json()['stops'][1]['wander_radius_m'], 25)
+        self.assertEqual(len(self.drive_calls), calls_before)
+        straightened = self.client.patch('/api/v1/trip/stops/bbb', json={'direct': True, 'route': 'straight'})
+        self.assertEqual(straightened.status_code, 200, straightened.get_json())
+        self.assertTrue(straightened.get_json()['stops'][1]['direct'])
+        self.assertEqual(straightened.get_json()['stops'][1]['route'], 'straight')
         moved = self.client.patch('/api/v1/trip/stops/2', json={
             'mode': 'drive',
             'go_inside': False,

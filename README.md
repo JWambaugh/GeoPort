@@ -107,7 +107,7 @@ GeoPort v5 is a ground-up architectural upgrade built on the latest **`pymobiled
 - **🌍 Global Teleportation & Street Routing** — Double-click anywhere on the globe, search any address/landmark, or generate realistic multi-stop street routes with **Walk**, **Run**, **Cycle**, **Drive**, or custom `km/h` speed profiles.
 - **🕹️ Live Keyboard & Touch D-Pad Control** — Nudge your live simulated GPS position smoothly using your keyboard arrow keys or the on-screen compass D-pad.
 - **📂 GPX & GeoJSON Playback** — Drag-and-drop `.gpx` or `.geojson` tracks to simulate runs, rides, and drives with live progress and pause/resume controls.
-- **🗺️ Multi-stop trips** — Plan a day of errands on the Routes tab: drive to a store, walk inside at about 1.3 m/s, dwell, then drive or walk to the next pin. Pause, skip, and edit the remaining stops while the clock runs. The same itinerary is on the local API and `scripts/geoportctl` (`docs/API.md`).
+- **🗺️ Multi-stop trips** — Plan a day of errands on the Routes tab. Each stop has an arrival (stay in the car, or walk inside at about 1.3 m/s) and a wait (stand still, or wander inside a radius). Pause, skip, and edit the remaining stops while the clock runs. The same itinerary is on the local API and `scripts/geoportctl` (`docs/API.md`).
 - **📶 True Wireless Wi-Fi Workflow** — Pair once over USB, enable Wi-Fi connection, unplug the cable, and simulate wirelessly across your local network.
 - **🎨 Dual Web UI (`Spatial HUD` & `Classic`)** — Launch into the dark glassmorphic Spatial Studio or click **Classic UI** anytime if you prefer the original GeoPort layout.
 

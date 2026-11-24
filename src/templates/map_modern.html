@@ -688,10 +688,30 @@
                         <button type="button" class="chip active" id="tripModeDrive" onclick="setTripMode('drive')">Drive</button>
                         <button type="button" class="chip" id="tripModeWalk" onclick="setTripMode('walk')">Walk</button>
                     </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+                        When you arrive: <b>Stay in the car</b> waits at the parking spot. <b>Walk inside</b> walks from the car to the place, then back to the car when you leave.
+                    </div>
                     <div class="btn-row" id="tripInsideRow">
-                        <button type="button" class="chip active" id="tripInsideBtn" onclick="setTripInside(true)">Go inside</button>
-                        <button type="button" class="chip" id="tripParkBtn" onclick="setTripInside(false)">Park only</button>
+                        <button type="button" class="chip active" id="tripInsideBtn" onclick="setTripInside(true)">Walk inside</button>
+                        <button type="button" class="chip" id="tripParkBtn" onclick="setTripInside(false)">Stay in the car</button>
                         <button type="button" class="chip" id="tripPassBtn" onclick="toggleTripPass()">Pass through</button>
+                    </div>
+                    <div class="btn-row" id="tripAddRouteRow" style="display: none;">
+                        <button type="button" class="chip active" id="tripAddPath" onclick="setTripDirect(false)">Along paths</button>
+                        <button type="button" class="chip" id="tripAddStraight" onclick="setTripDirect(true)">Straight line</button>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+                        While you wait: <b>Stand still</b> keeps the pin fixed. <b>Wander</b> walks it slowly around the stop and stays inside the radius. It does not jump.
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="chip active" id="tripStillBtn" onclick="setTripDwellMode('still')">Stand still</button>
+                        <button type="button" class="chip" id="tripWanderBtn" onclick="setTripDwellMode('wander')">Wander</button>
+                    </div>
+                    <div class="btn-row" id="tripWanderRow" style="display: none;">
+                        <button type="button" class="chip" onclick="setTripWanderSpeed(0.4, this)">Slow</button>
+                        <button type="button" class="chip active" onclick="setTripWanderSpeed(0.6, this)">Normal</button>
+                        <input type="number" id="tripWanderSpeed" min="0.1" max="2" step="0.1" value="0.6" aria-label="Wander speed meters per second" style="max-width: 72px;" title="Meters per second">
+                        <input type="number" id="tripWanderRadius" min="2" max="200" step="1" value="20" aria-label="Wander radius meters" style="max-width: 72px;" title="Radius in meters">
                     </div>
                     <div class="btn-row">
                         <button type="button" class="btn btn-primary" onclick="addTripFromSearch()">Add stop</button>
@@ -712,17 +732,30 @@
                             <button type="button" class="btn" onclick="searchTripEditPlace()">Move to place</button>
                             <button type="button" class="btn" id="tripRelocateBtn" onclick="toggleTripRelocate()">Pick on map</button>
                         </div>
+                        <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">How you get there, then what the pin does while the minutes run.</div>
                         <div class="btn-row">
                             <button type="button" class="chip" id="tripEditDrive" onclick="setEditedMode('drive')">Drive</button>
                             <button type="button" class="chip" id="tripEditWalk" onclick="setEditedMode('walk')">Walk</button>
                         </div>
+                        <div class="btn-row" id="tripEditRouteRow">
+                            <button type="button" class="chip" id="tripEditPath" onclick="setEditedDirect(false)">Along paths</button>
+                            <button type="button" class="chip" id="tripEditStraight" onclick="setEditedDirect(true)">Straight line</button>
+                        </div>
                         <div class="btn-row">
-                            <button type="button" class="chip" id="tripEditDwellType" onclick="setEditedPass(false)">Dwell</button>
+                            <button type="button" class="chip" id="tripEditDwellType" onclick="setEditedPass(false)">Wait here</button>
                             <button type="button" class="chip" id="tripEditPassType" onclick="setEditedPass(true)">Pass through</button>
                         </div>
                         <div class="btn-row" id="tripEditInsideRow">
-                            <button type="button" class="chip" id="tripEditInside" onclick="setEditedInside(true)">Go inside</button>
-                            <button type="button" class="chip" id="tripEditPark" onclick="setEditedInside(false)">Park only</button>
+                            <button type="button" class="chip" id="tripEditInside" onclick="setEditedInside(true)">Walk inside</button>
+                            <button type="button" class="chip" id="tripEditPark" onclick="setEditedInside(false)">Stay in the car</button>
+                        </div>
+                        <div class="btn-row">
+                            <button type="button" class="chip" id="tripEditStill" onclick="setEditedDwellMode('still')">Stand still</button>
+                            <button type="button" class="chip" id="tripEditWander" onclick="setEditedDwellMode('wander')">Wander</button>
+                        </div>
+                        <div class="btn-row" id="tripEditWanderRow">
+                            <input type="number" id="tripEditWanderSpeed" min="0.1" max="2" step="0.1" value="0.6" aria-label="Edit wander speed" style="max-width: 80px;" title="Wander speed m/s">
+                            <input type="number" id="tripEditWanderRadius" min="2" max="200" step="1" value="20" aria-label="Edit wander radius" style="max-width: 80px;" title="Wander radius meters">
                         </div>
                         <label style="font-size: 12.5px; color: var(--text-secondary);">Dwell minutes
                             <input type="number" id="tripEditDwell" min="0" max="1440" step="1" value="0" aria-label="Edit dwell minutes">
@@ -2191,6 +2224,28 @@
                     noteTripDetail();
                 });
             }
+            const editWanderSpeed = document.getElementById('tripEditWanderSpeed');
+            const editWanderRadius = document.getElementById('tripEditWanderRadius');
+            if (editWanderSpeed) {
+                editWanderSpeed.addEventListener('input', () => {
+                    const stop = editedStop();
+                    if (!stop) return;
+                    stop.dwell_mode = 'wander';
+                    stop.wander_mps = Math.max(0.1, Number(editWanderSpeed.value) || 0.6);
+                    syncEditChips(stop);
+                    noteTripDetail();
+                });
+            }
+            if (editWanderRadius) {
+                editWanderRadius.addEventListener('input', () => {
+                    const stop = editedStop();
+                    if (!stop) return;
+                    stop.dwell_mode = 'wander';
+                    stop.wander_radius_m = Math.max(2, Number(editWanderRadius.value) || 20);
+                    syncEditChips(stop);
+                    noteTripDetail();
+                });
+            }
             const editSearch = document.getElementById('tripEditSearch');
             if (editSearch) {
                 editSearch.addEventListener('keydown', (ev) => {
@@ -2231,6 +2286,10 @@
         let tripMode = 'drive';
         let tripInside = true;
         let tripPass = false;
+        let tripDirect = false;
+        let tripDwellMode = 'still';
+        let tripWanderMps = 0.6;
+        let tripWanderRadius = 20;
         let tripPick = false;
         let tripDragIndex = null;
         let tripDrawnKey = '';
@@ -2253,11 +2312,47 @@
             return tripUserMovedAt > 0 && (Date.now() - tripUserMovedAt) < 8000;
         }
 
+        function focusTripStop(stop) {
+            if (!map || !stop || stop.lat == null || stop.lng == null) return;
+            tripUserMovedAt = Date.now();
+            const zoom = Math.max(map.getZoom() || 0, 17);
+            const pin = map.project([Number(stop.lat), Number(stop.lng)], zoom);
+            const center = map.unproject(pin.subtract([260, 0]), zoom);
+            tripFitting = true;
+            map.flyTo(center, zoom, { duration: 0.7 });
+            setTimeout(() => { tripFitting = false; }, 900);
+        }
+
         function setTripMode(mode) {
             tripMode = mode === 'walk' ? 'walk' : 'drive';
             document.getElementById('tripModeDrive').classList.toggle('active', tripMode === 'drive');
             document.getElementById('tripModeWalk').classList.toggle('active', tripMode === 'walk');
             document.getElementById('tripInsideRow').style.display = tripMode === 'drive' ? '' : 'none';
+            const routeRow = document.getElementById('tripAddRouteRow');
+            if (routeRow) routeRow.style.display = tripMode === 'walk' ? '' : 'none';
+        }
+
+        function setTripDirect(direct) {
+            tripDirect = !!direct;
+            document.getElementById('tripAddPath').classList.toggle('active', !tripDirect);
+            document.getElementById('tripAddStraight').classList.toggle('active', tripDirect);
+        }
+
+        function setTripDwellMode(mode) {
+            tripDwellMode = mode === 'wander' ? 'wander' : 'still';
+            document.getElementById('tripStillBtn').classList.toggle('active', tripDwellMode === 'still');
+            document.getElementById('tripWanderBtn').classList.toggle('active', tripDwellMode === 'wander');
+            document.getElementById('tripWanderRow').style.display = tripDwellMode === 'wander' ? '' : 'none';
+        }
+
+        function setTripWanderSpeed(speed, btn) {
+            tripWanderMps = Number(speed);
+            const input = document.getElementById('tripWanderSpeed');
+            if (input) input.value = String(speed);
+            if (btn && btn.parentElement) {
+                btn.parentElement.querySelectorAll('.chip').forEach((chip) => chip.classList.remove('active'));
+                btn.classList.add('active');
+            }
         }
 
         function setTripInside(inside) {
@@ -2296,12 +2391,13 @@
         function tripLegBlurb(stop) {
             const mode = stop.mode === 'walk' ? 'walk' : 'drive';
             const dwell = Number(stop.dwell_minutes) || 0;
-            const kind = stop.waypoint ? 'pass-through' : (mode === 'walk' ? 'on foot' : (stop.go_inside === false ? 'park' : 'inside'));
+            const kind = stop.waypoint ? 'pass-through' : (mode === 'walk' ? (stop.direct ? 'straight line' : 'along paths') : (stop.go_inside === false ? 'stay in car' : 'walk inside'));
+            const wait = stop.dwell_mode === 'wander' ? `wander ${stop.wander_mps || 0.6} m/s` : 'stand still';
             let stats = '';
             if (stop.route_state === 'routing') stats = ' · routing…';
             else if (stop.route_state === 'error') stats = ' · route failed';
             else if (stop.distance_m) stats = ` · ${(Number(stop.distance_m) / 1000).toFixed(1)} km · ${formatDriveClock(stop.travel_s)}`;
-            return `${mode} · ${kind} · ${dwell} min${stats}`;
+            return `${mode} · ${kind} · ${wait} · ${dwell} min${stats}`;
         }
 
         function renderTripEditor() {
@@ -2330,7 +2426,7 @@
                 buttons[0].onclick = (ev) => { ev.stopPropagation(); moveTripStop(index, -1); };
                 buttons[1].onclick = (ev) => { ev.stopPropagation(); moveTripStop(index, 1); };
                 buttons[2].onclick = (ev) => { ev.stopPropagation(); removeTripStop(index); };
-                row.addEventListener('click', () => openTripEditor(index));
+                row.addEventListener('click', () => openTripEditor(index, true));
                 row.addEventListener('dragstart', () => { tripDragIndex = index; });
                 row.addEventListener('dragover', (ev) => ev.preventDefault());
                 row.addEventListener('drop', () => {
@@ -2365,6 +2461,10 @@
 
         function pushTripStop(stop) {
             if (!stop.id) stop.id = tripStopId();
+            if (stop.direct == null) stop.direct = stop.mode === 'walk' && tripDirect;
+            if (!stop.dwell_mode) stop.dwell_mode = tripDwellMode;
+            if (stop.wander_mps == null) stop.wander_mps = Number(document.getElementById('tripWanderSpeed')?.value) || tripWanderMps;
+            if (stop.wander_radius_m == null) stop.wander_radius_m = Number(document.getElementById('tripWanderRadius')?.value) || tripWanderRadius;
             tripStops.push(stop);
             noteTripStructure(tripStops.length - 1);
         }
@@ -2515,6 +2615,11 @@
                     dwell_minutes: Number(stop.dwell_minutes) || 0,
                     go_inside: stop.go_inside !== false,
                     waypoint: !!stop.waypoint,
+                    direct: !!stop.direct,
+                    route: stop.direct ? 'straight' : 'path',
+                    dwell_mode: stop.dwell_mode === 'wander' ? 'wander' : 'still',
+                    wander_mps: Number(stop.wander_mps) || 0.6,
+                    wander_radius_m: Number(stop.wander_radius_m) || 20,
                 })),
                 start: !!start,
                 include_stops: document.getElementById('tripSigns').checked,
@@ -2700,8 +2805,8 @@
                 });
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: true, autoPan: true }).addTo(tripLayer);
                 marker.on('click', (ev) => {
-                    if (ev.originalEvent) L.DomEvent.stopPropagation(ev);
-                    openTripEditor(index);
+                    if (ev.originalEvent) L.DomEvent.stopPropagation(ev.originalEvent);
+                    openTripEditor(index, false);
                 });
                 marker.on('dragstart', () => { tripDragging = true; tripUserMovedAt = Date.now(); });
                 marker.on('dragend', (ev) => {
@@ -2732,13 +2837,17 @@
                 local.distance_m = remote.distance_m;
                 local.travel_s = remote.travel_s;
                 local.walk_in_s = remote.walk_in_s;
+                if (remote.direct != null) local.direct = !!remote.direct;
+                if (remote.dwell_mode) local.dwell_mode = remote.dwell_mode;
+                if (remote.wander_mps != null) local.wander_mps = remote.wander_mps;
+                if (remote.wander_radius_m != null) local.wander_radius_m = remote.wander_radius_m;
                 local.route_state = remote.route_state || (remote.parts && remote.parts.length ? 'ready' : local.route_state);
                 local.status = remote.status;
                 if (remote.id) local.id = remote.id;
             });
         }
 
-        function openTripEditor(index) {
+        function openTripEditor(index, focus) {
             const stop = tripStops[index];
             if (!stop) return;
             if (tripRunning() && stop.status === 'done') {
@@ -2752,9 +2861,15 @@
             document.getElementById('tripEditLabel').value = stop.label || '';
             document.getElementById('tripEditDwell').value = String(Number(stop.dwell_minutes) || 0);
             document.getElementById('tripEditSearch').value = '';
+            const speed = document.getElementById('tripEditWanderSpeed');
+            const radius = document.getElementById('tripEditWanderRadius');
+            if (speed) speed.value = String(Number(stop.wander_mps) || 0.6);
+            if (radius) radius.value = String(Number(stop.wander_radius_m) || 20);
             syncEditChips(stop);
             renderTripEditor();
             drawTrip({ stops: tripStops }, { fit: false });
+            panel.scrollIntoView({ block: 'nearest' });
+            if (focus) focusTripStop(stop);
         }
 
         function closeTripEditor() {
@@ -2777,7 +2892,33 @@
             document.getElementById('tripEditInsideRow').style.display = walk || stop.waypoint ? 'none' : '';
             document.getElementById('tripEditInside').classList.toggle('active', stop.go_inside !== false);
             document.getElementById('tripEditPark').classList.toggle('active', stop.go_inside === false);
+            const routeRow = document.getElementById('tripEditRouteRow');
+            if (routeRow) routeRow.style.display = walk ? '' : 'none';
+            document.getElementById('tripEditPath').classList.toggle('active', !stop.direct);
+            document.getElementById('tripEditStraight').classList.toggle('active', !!stop.direct);
+            const wandering = stop.dwell_mode === 'wander';
+            document.getElementById('tripEditStill').classList.toggle('active', !wandering);
+            document.getElementById('tripEditWander').classList.toggle('active', wandering);
+            document.getElementById('tripEditWanderRow').style.display = wandering ? '' : 'none';
             document.getElementById('tripEditDwell').disabled = !!stop.waypoint;
+        }
+
+        function setEditedDirect(direct) {
+            const stop = editedStop();
+            if (!stop) return;
+            stop.mode = 'walk';
+            stop.direct = !!direct;
+            stop.go_inside = false;
+            syncEditChips(stop);
+            noteTripStructure(tripSelected);
+        }
+
+        function setEditedDwellMode(mode) {
+            const stop = editedStop();
+            if (!stop) return;
+            stop.dwell_mode = mode === 'wander' ? 'wander' : 'still';
+            syncEditChips(stop);
+            noteTripDetail();
         }
 
         function editedStop() {
@@ -2940,6 +3081,10 @@
                     dwell_minutes: stop.dwell_minutes,
                     go_inside: stop.go_inside,
                     waypoint: stop.waypoint,
+                    direct: !!stop.direct,
+                    dwell_mode: stop.dwell_mode === 'wander' ? 'wander' : 'still',
+                    wander_mps: stop.wander_mps,
+                    wander_radius_m: stop.wander_radius_m,
                     parts: stop.parts || [],
                     distance_m: stop.distance_m,
                     travel_s: stop.travel_s,
@@ -2970,7 +3115,7 @@
                 if (data && data.ok && data.stop_count) {
                     applyTrip(data, true);
                     const edit = Number(new URLSearchParams(location.search).get('edit'));
-                    if (edit >= 1 && edit <= tripStops.length) openTripEditor(edit - 1);
+                    if (edit >= 1 && edit <= tripStops.length) openTripEditor(edit - 1, true);
                 }
             } catch (e) {}
         }

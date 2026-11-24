@@ -195,13 +195,29 @@ curl -sS -X PATCH -H 'Content-Type: application/json' \
 ./scripts/geoportctl trip edit 2 --delete
 ```
 
+A stop has two separate choices. **Arrival** is how you get there: `go_inside: true` walks from the parked car to the place at about 1.3 m/s and walks back to the car when you leave; `go_inside: false` stays in the car. **Dwell** is what the pin does while the minutes run: `dwell_mode: "still"` stands still, and `dwell_mode: "wander"` walks a gentle random path at `wander_mps` inside `wander_radius_m` meters of the stop. The wander never jumps farther than speed × time.
+
+A walk leg follows footpaths unless `direct: true` or `route: "straight"`. That draws and walks a straight line and does not call the foot router. `route: "path"` is the default.
+
+A drive between two stops that are already the same place (or a router reply of no drivable length) is not a failure. The car stays put, and a walk-inside leg still runs when you asked for one.
+
+Clicking a stop in the Trip card flies the map to that pin. If the map is zoomed out it comes in to street level; if it is already close it keeps the zoom. That counts as you moving the map, so the fit-to-trip does not snap the view back.
+
 The Trip card routes as you edit. `POST /api/v1/trip/preview` (and `/api/trip/preview`)
 draws the legs without waiting for stop signs or signals. Each leg is cached
-by its mode, endpoints, and go-inside choice, so an unchanged leg is not
+by its mode, endpoints, straight-line choice, and go-inside choice, so an unchanged leg is not
 asked of the router again. The server emits `trip_preview` after each leg,
 and `trip` when the draft is saved. Sign and signal lookup still runs when
-you Plan or Start. The map fits the trip unless you have panned in the last
+you Plan or Start. The map fits the trip unless you have panned, or opened a stop, in the last
 few seconds.
+
+```bash
+./scripts/geoportctl trip --walk-direct "39.22,-121.07" 5 --wander 0.6 --radius 25
+./scripts/geoportctl trip edit 2 --wander 0.6 --radius 25
+./scripts/geoportctl trip edit 2 --still
+./scripts/geoportctl trip edit 2 --direct
+./scripts/geoportctl trip edit 2 --path
+```
 
 The trip is stored in `~/.geoport/trip.json`. If it was playing or paused
 when GeoPort stops, the next launch continues from the current simulated

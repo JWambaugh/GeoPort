@@ -9,6 +9,7 @@ road endpoint to the place, then a dwell, then a walk back to the car.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import threading
@@ -37,6 +38,7 @@ from geoport.services.drive import (
     haversine_m,
     parse_osrm_route,
     position_at,
+    EARTH_RADIUS_M,
 )
 
 WALK_MPS = 1.3
@@ -46,7 +48,12 @@ WALK_MAX_MPS = 3.0
 INSIDE_GAP_M = 8.0
 CAR_GAP_M = 12.0
 SHORT_STRAIGHT_M = 150.0
-INDOOR_ACCURACY_M = 12.0
+# A drive shorter than this is "already there": the car stays put.
+NEAR_DRIVE_M = 15.0
+WANDER_SLOW_MPS = 0.4
+WANDER_NORMAL_MPS = 0.8
+WANDER_DEFAULT_MPS = 0.6
+WANDER_DEFAULT_RADIUS_M = 20.0
 PAUSE_MIN_M = 40.0
 _HTTP_TIMEOUT = (3.05, 12)
 MOVEMENT = frozenset({'drive', 'walk', 'walk_in', 'walk_to_car'})
@@ -75,6 +82,92 @@ def reconnect_drive_state(drive_state: str, trip_state: str) -> str:
     if trip_state in ('playing', 'paused'):
         return trip_state
     return drive_state
+
+
+def _dwell_and_route(item: dict[str, Any], mode: str) -> tuple[bool, str, float, float]:
+    """Return ``(direct, dwell_mode, wander_mps, wander_radius_m)``."""
+    route = str(item.get('route') or '').strip().lower()
+    if route in ('straight', 'direct', 'line'):
+        direct = True
+    elif route in ('path', 'routed', 'foot'):
+        direct = False
+    else:
+        direct = _as_bool(item.get('direct'), False)
+    if mode != 'walk':
+        direct = False
+    dwell_mode = str(item.get('dwell_mode') or '').strip().lower()
+    wander = item.get('wander')
+    speed = item.get('wander_mps', item.get('wander_speed'))
+    radius = item.get('wander_radius_m', item.get('radius'))
+    enabled = dwell_mode == 'wander' or wander is True
+    if wander is False or dwell_mode == 'still':
+        enabled = False
+    if isinstance(wander, (int, float)) and not isinstance(wander, bool):
+        speed = wander
+        enabled = dwell_mode != 'still'
+    mps = WANDER_DEFAULT_MPS if speed is None else float(speed)
+    rad = WANDER_DEFAULT_RADIUS_M if radius is None else float(radius)
+    mps, rad = _clamp_wander(mps, rad)
+    return direct, ('wander' if enabled else 'still'), mps, rad
+
+
+def _zero_drive_error(exc: BaseException) -> bool:
+    """True when the router is saying the car is already at the destination."""
+    text = str(exc).lower()
+    return any(phrase in text for phrase in (
+        'no drivable length',
+        'same place',
+        'route length is zero',
+    ))
+
+
+def _clamp_wander(speed_mps: float, radius_m: float) -> tuple[float, float]:
+    speed = min(2.0, max(0.1, float(speed_mps)))
+    radius = min(200.0, max(2.0, float(radius_m)))
+    return speed, radius
+
+
+def advance_wander(
+    north_m: float,
+    east_m: float,
+    heading_deg: float,
+    turn_dps: float,
+    dt_s: float,
+    speed_mps: float,
+    radius_m: float,
+    rng: random.Random,
+) -> tuple[float, float, float, float]:
+    """One gentle step of a random walk. The step is never longer than speed * dt.
+
+    ``heading_deg`` is 0 toward north and 90 toward east. Near the edge of the
+    radius the walk turns back toward the middle instead of jumping.
+    """
+    dt = max(0.0, min(float(dt_s), 0.5))
+    speed, radius = _clamp_wander(speed_mps, radius_m)
+    if dt <= 0.0 or speed <= 0.0:
+        return north_m, east_m, heading_deg, turn_dps
+    turn = float(turn_dps) + rng.uniform(-18.0, 18.0) * dt
+    turn = max(-30.0, min(30.0, turn))
+    heading = (float(heading_deg) + turn * dt) % 360.0
+    step = speed * dt
+    rad = math.radians(heading)
+    north = float(north_m) + math.cos(rad) * step
+    east = float(east_m) + math.sin(rad) * step
+    dist = math.hypot(north, east)
+    if dist > radius:
+        scale = radius / dist
+        north *= scale
+        east *= scale
+        heading = (math.degrees(math.atan2(-east, -north)) + 360.0) % 360.0
+        turn = 0.0
+    return north, east, heading, turn
+
+
+def _offset_latlng(lat: float, lng: float, north_m: float, east_m: float) -> tuple[float, float]:
+    dlat = (north_m / EARTH_RADIUS_M) * (180.0 / math.pi)
+    cos = max(0.2, math.cos(math.radians(lat)))
+    dlng = (east_m / (EARTH_RADIUS_M * cos)) * (180.0 / math.pi)
+    return lat + dlat, lng + dlng
 
 
 def _now_iso() -> str:
@@ -316,6 +409,10 @@ class TripStop:
     dwell_s: float
     go_inside: bool
     waypoint: bool
+    direct: bool = False
+    dwell_mode: str = 'still'
+    wander_mps: float = WANDER_DEFAULT_MPS
+    wander_radius_m: float = WANDER_DEFAULT_RADIUS_M
     address: Optional[str] = None
     road_lat: Optional[float] = None
     road_lng: Optional[float] = None
@@ -347,6 +444,11 @@ class TripStop:
             'dwell_minutes': self.dwell_minutes,
             'go_inside': self.go_inside,
             'waypoint': self.waypoint,
+            'direct': self.direct,
+            'route': 'straight' if self.direct else 'path',
+            'dwell_mode': self.dwell_mode if self.dwell_mode == 'wander' else 'still',
+            'wander_mps': round(self.wander_mps, 2),
+            'wander_radius_m': round(self.wander_radius_m, 1),
         }
         if self.address:
             payload['address'] = self.address
@@ -385,6 +487,10 @@ class TripStop:
             dwell_s=float(raw.get('dwell_s') or 0),
             go_inside=bool(raw.get('go_inside')),
             waypoint=bool(raw.get('waypoint')),
+            direct=bool(raw.get('direct')) or str(raw.get('route') or '').lower() == 'straight',
+            dwell_mode='wander' if raw.get('dwell_mode') == 'wander' else 'still',
+            wander_mps=float(raw.get('wander_mps') or WANDER_DEFAULT_MPS),
+            wander_radius_m=float(raw.get('wander_radius_m') or WANDER_DEFAULT_RADIUS_M),
             address=raw.get('address'),
             road_lat=road.get('lat') if isinstance(road, dict) else None,
             road_lng=road.get('lng') if isinstance(road, dict) else None,
@@ -409,6 +515,7 @@ def _same_place(a: TripStop, b: TripStop, meters: float = 8.0) -> bool:
         a.mode == b.mode
         and a.go_inside == b.go_inside
         and a.waypoint == b.waypoint
+        and a.direct == b.direct
         and haversine_m(a.lat, a.lng, b.lat, b.lng) <= meters
     )
 
@@ -471,6 +578,12 @@ class TripService:
         self._accuracy_saved: Optional[float] = None
         self._error: Optional[str] = None
         self._rng = random.Random()
+        self._dwell_anchor: Optional[tuple[float, float]] = None
+        self._wander_north = 0.0
+        self._wander_east = 0.0
+        self._wander_heading = 0.0
+        self._wander_turn = 0.0
+        self._wander_mark = 0.0
         self._last_save = 0.0
         self._closed = False
         self._leg_cache: dict[tuple, dict[str, Any]] = {}
@@ -871,6 +984,7 @@ class TripService:
             if self.active and self._now() - self._last_save > 5:
                 self._persist()
             return
+        self._step_dwell_wander()
         if self._dwell_done() + 1e-3 < self._dwell_total:
             if self._now() - self._last_save > 5:
                 self._persist()
@@ -1049,9 +1163,8 @@ class TripService:
                 self._error = str(exc)
         elif self.state == 'playing' and self.phase == 'dwell':
             self._dwell_mark = self._now()
-            stop = self.stops[self.index] if self.index < len(self.stops) else None
-            if stop is not None and stop.go_inside:
-                self._enter_indoor()
+            self._wander_mark = self._now()
+            self._hold_steady()
         self._persist(force=True)
         self._emit()
 
@@ -1158,6 +1271,7 @@ class TripService:
         go_inside = _as_bool(item.get('go_inside', item.get('inside', True)), True)
         if mode == 'walk' or waypoint:
             go_inside = False
+        direct, dwell_mode, wander_mps, wander_radius = _dwell_and_route(item, mode)
         label = item.get('label')
         address = item.get('address') or item.get('q') or item.get('query')
         if item.get('lat') is not None or item.get('lng') is not None:
@@ -1183,6 +1297,10 @@ class TripService:
             dwell_s=dwell_s,
             go_inside=go_inside,
             waypoint=waypoint,
+            direct=direct,
+            dwell_mode=dwell_mode,
+            wander_mps=wander_mps,
+            wander_radius_m=wander_radius,
             address=str(address) if address else None,
         )
         return stop
@@ -1251,25 +1369,26 @@ class TripService:
                     walk_s += back.duration_s
                     travel += back.duration_s
                     distance += back.distance_m
-            plan, road = self._drive_router(car, (stop.lat, stop.lng), use_signs, self.offset)
-            stop.road_lat, stop.road_lng = road
-            summary = plan.stops_summary or {}
-            signs = int(summary.get('stop_signs') or 0)
-            signals = int(summary.get('signals') or 0)
-            expected = float(summary.get('expected_signal_s') or 0)
-            drive_s = float(plan.eta_s or plan.duration_s)
-            parts.append({
-                'mode': 'drive',
-                'role': 'drive',
-                'geometry': plan.geometry,
-                'distance_m': round(plan.distance_m, 1),
-                'duration_s': round(drive_s, 1),
-                'provider': plan.provider,
-                'stop_signs': signs,
-                'signals': signals,
-            })
-            travel += drive_s
-            distance += plan.distance_m
+            plan, road = self._route_drive(car, (stop.lat, stop.lng), use_signs)
+            stop.road_lat, stop.road_lng = road[0], road[1]
+            if plan is not None:
+                summary = plan.stops_summary or {}
+                signs = int(summary.get('stop_signs') or 0)
+                signals = int(summary.get('signals') or 0)
+                expected = float(summary.get('expected_signal_s') or 0)
+                drive_s = float(plan.eta_s or plan.duration_s)
+                parts.append({
+                    'mode': 'drive',
+                    'role': 'drive',
+                    'geometry': plan.geometry,
+                    'distance_m': round(plan.distance_m, 1),
+                    'duration_s': round(drive_s, 1),
+                    'provider': plan.provider,
+                    'stop_signs': signs,
+                    'signals': signals,
+                })
+                travel += drive_s
+                distance += plan.distance_m
             gap = haversine_m(road[0], road[1], stop.lat, stop.lng)
             if stop.go_inside and not stop.waypoint and gap >= INSIDE_GAP_M:
                 walked = build_walk_plan(
@@ -1287,7 +1406,7 @@ class TripService:
                     travel += walked.duration_s
                     distance += walked.distance_m
         else:
-            walked = self._preview_walk(person, (stop.lat, stop.lng), short=False)
+            walked = self._preview_walk(person, (stop.lat, stop.lng), short=bool(stop.direct))
             if walked is not None:
                 parts.append(_part('walk', 'walk', walked))
                 walk_s = walked.duration_s
@@ -1323,6 +1442,53 @@ class TripService:
                 person = car
             return person, car
         return (stop.lat, stop.lng), car
+
+    def _route_drive(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        signs: bool,
+    ) -> tuple[Optional[DrivePlan], tuple[float, float]]:
+        """Drive from ``start`` to ``end``. A zero-length hop leaves the car where it is."""
+        if haversine_m(start[0], start[1], end[0], end[1]) < NEAR_DRIVE_M:
+            return None, start
+        try:
+            plan, road = self._drive_router(start, end, signs, self.offset)
+        except DriveRouteError as exc:
+            if _zero_drive_error(exc):
+                return None, start
+            raise
+        return plan, road
+
+    def _step_dwell_wander(self) -> None:
+        if self.state != 'playing' or self.phase != 'dwell' or self.index >= len(self.stops):
+            return
+        stop = self.stops[self.index]
+        if stop.dwell_mode != 'wander':
+            return
+        anchor = self._dwell_anchor
+        if anchor is None:
+            return
+        now = self._now()
+        dt = 0.0 if not self._wander_mark else now - self._wander_mark
+        self._wander_mark = now
+        if dt <= 0.0:
+            return
+        north, east, heading, turn = advance_wander(
+            self._wander_north,
+            self._wander_east,
+            self._wander_heading,
+            self._wander_turn,
+            dt,
+            stop.wander_mps,
+            stop.wander_radius_m,
+            self._rng,
+        )
+        self._wander_north = north
+        self._wander_east = east
+        self._wander_heading = heading
+        self._wander_turn = turn
+        self._set_person(*_offset_latlng(anchor[0], anchor[1], north, east))
 
     def _preview_walk(
         self,
@@ -1429,7 +1595,7 @@ class TripService:
         if phase == 'walk':
             self.owns_drive = False
             self._in_car = False
-            plan = self._movement_walk(self._person(), (stop.lat, stop.lng), short=False)
+            plan = self._movement_walk(self._person(), (stop.lat, stop.lng), short=bool(stop.direct))
             if plan is None:
                 self._queue.pop(0)
                 self._set_person(stop.lat, stop.lng)
@@ -1476,6 +1642,9 @@ class TripService:
         self._token += 1
         self._awaiting = True
         self.owns_drive = False
+        # A walk must follow the path. GPS wander on top of each tick looks like
+        # the pin is darting around at random.
+        self._hold_steady()
         self.drive.play_plan(plan)
 
     def _play_drive(self, stop: TripStop) -> None:
@@ -1487,8 +1656,11 @@ class TripService:
         self._token += 1
         self._awaiting = True
         self._ignore_drive = True
+        self._restore_motion_accuracy()
         try:
             try:
+                if haversine_m(start[0], start[1], stop.lat, stop.lng) < NEAR_DRIVE_M:
+                    raise DriveRouteError('Start and destination are the same place')
                 plan = self.drive.plan(
                     start,
                     (stop.lat, stop.lng),
@@ -1500,11 +1672,10 @@ class TripService:
                     anchor_end=False,
                 )
             except DriveRouteError as exc:
-                if 'same place' in str(exc).lower():
+                if _zero_drive_error(exc):
                     self._awaiting = False
                     self.owns_drive = False
-                    stop.road_lat, stop.road_lng = stop.lat, stop.lng
-                    self._car = (stop.lat, stop.lng)
+                    stop.road_lat, stop.road_lng = start[0], start[1]
                     if self._queue and self._queue[0] == 'drive':
                         self._queue.pop(0)
                     self._start_phase()
@@ -1537,16 +1708,22 @@ class TripService:
             point = (stop.road_lat, stop.road_lng)
         else:
             point = self._car_point()
+        self._dwell_anchor = point
+        self._wander_north = 0.0
+        self._wander_east = 0.0
+        self._wander_heading = self._rng.random() * 360.0
+        self._wander_turn = 0.0
+        self._wander_mark = self._now()
         self._set_person(point[0], point[1])
         if stop.arrived_at is None:
             stop.arrived_at = _now_iso()
         if stop.mode == 'drive' and stop.go_inside:
             self._in_car = False
-            self._enter_indoor()
         elif stop.mode == 'drive':
             self._in_car = True
         else:
             self._in_car = False
+        self._hold_steady()
 
     def _complete_movement(self, token: int) -> None:
         try:
@@ -1721,7 +1898,8 @@ class TripService:
         except Exception as exc:
             logger.debug(f'Could not record trip position: {exc}')
 
-    def _enter_indoor(self) -> None:
+    def _hold_steady(self) -> None:
+        """Publish the route point exactly. GPS wander on a walk looks like darting."""
         if self.position is None:
             return
         try:
@@ -1730,8 +1908,16 @@ class TripService:
             return
         if self._accuracy_saved is None:
             self._accuracy_saved = current
-        if current < INDOOR_ACCURACY_M:
-            self.position.set_accuracy(INDOOR_ACCURACY_M)
+        if current > 0.0:
+            self.position.set_accuracy(0)
+
+    def _enter_indoor(self) -> None:
+        # Kept as the name older call sites use. Going inside must not add a
+        # random GPS offset; that was the pin jumping around the store.
+        self._hold_steady()
+
+    def _restore_motion_accuracy(self) -> None:
+        self._leave_indoor()
 
     def _leave_indoor(self) -> None:
         if self._accuracy_saved is None or self.position is None:
@@ -1883,6 +2069,7 @@ class TripService:
             self._round_pair(person),
             self._round_pair(car),
             self._round_pair((stop.lat, stop.lng)),
+            bool(stop.direct),
             round(float(self.walk_speed), 2),
             round(float(self.offset), 2),
             bool(signs),
@@ -1935,7 +2122,10 @@ class TripService:
         raise DriveRouteError(f'No stop {text}', status=404)
 
     def _route_fields(self, patch: dict[str, Any]) -> bool:
-        keys = ('mode', 'lat', 'lng', 'to', 'address', 'go_inside', 'inside', 'waypoint', 'move')
+        keys = (
+            'mode', 'lat', 'lng', 'to', 'address', 'go_inside', 'inside',
+            'waypoint', 'move', 'direct', 'route',
+        )
         return any(key in patch for key in keys)
 
     def _ensure_editable(self, index: int, patch: dict[str, Any]) -> None:
@@ -1961,6 +2151,19 @@ class TripService:
             data['go_inside'] = _as_bool(patch.get('go_inside', patch.get('inside')), True)
         if 'waypoint' in patch:
             data['waypoint'] = _as_bool(patch.get('waypoint'), False)
+        if patch.get('route') not in (None, ''):
+            data['route'] = str(patch.get('route')).strip().lower()
+            data['direct'] = data['route'] in ('straight', 'direct', 'line')
+        elif 'direct' in patch:
+            data['direct'] = _as_bool(patch.get('direct'), False)
+            data['route'] = 'straight' if data['direct'] else 'path'
+        if patch.get('dwell_mode') is not None or 'wander' in patch or 'wander_mps' in patch or 'radius' in patch or 'wander_radius_m' in patch:
+            direct_keep = data.get('direct')
+            _direct, mode_name, speed, radius = _dwell_and_route({**data, **patch}, data.get('mode') or 'drive')
+            data['direct'] = direct_keep if 'direct' not in patch and 'route' not in patch else _direct
+            data['dwell_mode'] = mode_name
+            data['wander_mps'] = speed
+            data['wander_radius_m'] = radius
         if data.get('waypoint'):
             data['dwell_minutes'] = 0
             data['go_inside'] = False
