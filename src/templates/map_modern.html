@@ -269,6 +269,44 @@
             background: var(--accent-glow); color: var(--accent);
             border-color: var(--border-strong);
         }
+        .trip-stop {
+            display: grid;
+            grid-template-columns: 28px 1fr auto;
+            gap: 8px;
+            align-items: center;
+            padding: 8px;
+            border-radius: 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-glass);
+        }
+        .trip-stop.current { border-color: var(--accent); }
+        .trip-num {
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: #0284c7; color: #fff; font-weight: 700; font-size: 13px;
+        }
+        .trip-stop-main { min-width: 0; }
+        .trip-stop-main strong {
+            display: block; font-size: 13px; font-weight: 650;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .trip-meta { font-size: 12px; color: var(--text-secondary); }
+        .trip-actions { display: flex; gap: 4px; }
+        .trip-actions button {
+            width: 28px; height: 28px; border-radius: 8px;
+            border: 1px solid var(--border-glass); background: transparent;
+            color: var(--text-secondary); cursor: pointer; font-size: 12px;
+        }
+        .trip-actions button:hover { color: var(--text-primary); border-color: var(--accent); }
+        .trip-pin { background: none !important; border: none !important; }
+        .trip-pin-num {
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: #0284c7; color: #fff; font-weight: 700; font-size: 13px;
+            border: 2px solid #f8fafc; box-shadow: 0 6px 16px rgba(2, 6, 23, 0.35);
+        }
+        .trip-pin-num.current { background: #10b981; }
+        .trip-pin-num.walk { background: #059669; }
 
         /* Fuel Price Hero */
         .fuel-hero {
@@ -619,6 +657,60 @@
                     <button type="button" class="btn" onclick="promptGoogleKey()">Google API key</button>
                 </div>
 
+                <div class="card" id="tripCard">
+                    <div class="card-header">
+                        <span>Trip</span>
+                        <span class="mono" id="tripStatus" style="color: var(--accent);">Idle</span>
+                    </div>
+                    <div style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.45;">
+                        Drive to a store, walk inside, wait, then head to the next stop. Walk legs stay near 1.3 m/s. Pins can be a pass-through or a timed stop.
+                    </div>
+                    <div class="search-wrap">
+                        <input type="text" id="tripSearch" placeholder="Address, place, or lat, lng" autocomplete="off">
+                        <div class="search-results" id="tripSearchResults"></div>
+                    </div>
+                    <div class="btn-row">
+                        <input type="number" id="tripDwell" min="0" max="1440" step="1" value="20" aria-label="Dwell minutes" style="max-width: 92px;" title="Minutes to stay">
+                        <button type="button" class="chip active" id="tripModeDrive" onclick="setTripMode('drive')">Drive</button>
+                        <button type="button" class="chip" id="tripModeWalk" onclick="setTripMode('walk')">Walk</button>
+                    </div>
+                    <div class="btn-row" id="tripInsideRow">
+                        <button type="button" class="chip active" id="tripInsideBtn" onclick="setTripInside(true)">Go inside</button>
+                        <button type="button" class="chip" id="tripParkBtn" onclick="setTripInside(false)">Park only</button>
+                        <button type="button" class="chip" id="tripPassBtn" onclick="toggleTripPass()">Pass through</button>
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="btn btn-primary" onclick="addTripFromSearch()">Add stop</button>
+                        <button type="button" class="btn" id="tripPinBtn" onclick="toggleTripPin()">Add pin from map</button>
+                    </div>
+                    <div id="tripStopList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
+                        <input type="checkbox" id="tripSigns" checked>
+                        Stop at signs &amp; signals
+                    </label>
+                    <div class="btn-row">
+                        <label style="font-size: 12.5px; color: var(--text-secondary); flex: 1;">Walk m/s
+                            <input type="number" id="tripWalkSpeed" min="0.5" max="3" step="0.1" value="1.3" aria-label="Walking speed meters per second">
+                        </label>
+                    </div>
+                    <div class="btn-row">
+                        <button type="button" class="btn" id="tripPlanBtn" onclick="planTrip(false)">Plan</button>
+                        <button type="button" class="btn btn-emerald" id="tripStartBtn" onclick="planTrip(true)">Start</button>
+                    </div>
+                    <div id="tripLive" style="font-size: 13.5px; font-weight: 650; line-height: 1.4;">No trip yet</div>
+                    <div id="tripSchedule" class="mono" style="font-size: 12px; color: var(--text-secondary); line-height: 1.45; white-space: pre-line;"></div>
+                    <div class="btn-row">
+                        <button type="button" class="btn" id="tripPauseBtn" onclick="tripPauseResume()">Pause</button>
+                        <button type="button" class="btn" onclick="tripSkip()">Skip</button>
+                        <button type="button" class="btn btn-danger" onclick="tripCancel()">Stop</button>
+                    </div>
+                    <div class="btn-row">
+                        <input type="text" id="tripSaveName" placeholder="Save as…" style="max-width: 46%;">
+                        <button type="button" class="btn" onclick="saveNamedTrip()">Save</button>
+                        <button type="button" class="btn" onclick="loadNamedTrip()">Load</button>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <span>Movement Speed</span>
@@ -747,6 +839,7 @@
         // Speed-limit drive. The server owns the clock and pushes /set_location.
         let driveLayerGroup = null;
         let driveStopLayer = null;
+        let tripLayer = null;
         let driveLine = null;
         let driveStartMarker = null;
         let driveEndMarker = null;
@@ -953,6 +1046,7 @@
             drawnLayerGroup.addTo(map);
             driveLayerGroup = L.layerGroup().addTo(map);
             driveStopLayer = L.layerGroup().addTo(map);
+            tripLayer = L.layerGroup().addTo(map);
 
             const savedTheme = localStorage.getItem('geoport_theme') || 'dark';
             document.documentElement.setAttribute('data-theme', savedTheme);
@@ -969,6 +1063,10 @@
                 placePin(e.latlng.lat, e.latlng.lng, false);
             });
             map.on('click', (e) => {
+                if (tripPick) {
+                    addTripPin(e.latlng.lat, e.latlng.lng);
+                    return;
+                }
                 if (drivePickTarget) {
                     setDrivePoint(drivePickTarget, e.latlng.lat, e.latlng.lng);
                     return;
@@ -1427,6 +1525,9 @@
         function setDrivePick(which) {
             if (!which || drivePickTarget === which) drivePickTarget = null;
             else {
+                tripPick = false;
+                const pinBtn = document.getElementById('tripPinBtn');
+                if (pinBtn) pinBtn.classList.remove('btn-primary');
                 drivePickTarget = which;
                 isDrawingRoute = false;
                 const drawLabel = document.getElementById('drawRouteLabel');
@@ -1999,6 +2100,20 @@
             populateDevices();
             selectFuelRegion('QLD');
             hydrateStatus();
+            hydrateTrip();
+            const openTab = new URLSearchParams(location.search).get('tab');
+            if (openTab === 'routes') {
+                const routesBtn = Array.from(document.querySelectorAll('.tab-btn')).find((btn) => (btn.textContent || '').indexOf('Routes') !== -1);
+                if (routesBtn) switchTab('routes', routesBtn);
+                const tripCard = document.getElementById('tripCard');
+                if (tripCard) tripCard.scrollIntoView({ block: 'start' });
+            }
+            const tripSearch = document.getElementById('tripSearch');
+            if (tripSearch) {
+                tripSearch.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); addTripFromSearch(); }
+                });
+            }
 
             document.getElementById('searchInput').addEventListener('keydown', (ev) => {
                 if (ev.key === 'Enter') { ev.preventDefault(); runSearch(); }
@@ -2027,6 +2142,478 @@
                 else if (ev.key === 'ArrowRight') { ev.preventDefault(); nudgeMarker(0, 0.00012); }
             });
         });
+
+        // ------------------ Multi-stop trip ------------------
+        let tripStops = [];
+        let tripMode = 'drive';
+        let tripInside = true;
+        let tripPass = false;
+        let tripPick = false;
+        let tripDragIndex = null;
+        let tripDrawnKey = '';
+        let tripLive = null;
+        let tripState = 'idle';
+
+        function setTripMode(mode) {
+            tripMode = mode === 'walk' ? 'walk' : 'drive';
+            document.getElementById('tripModeDrive').classList.toggle('active', tripMode === 'drive');
+            document.getElementById('tripModeWalk').classList.toggle('active', tripMode === 'walk');
+            document.getElementById('tripInsideRow').style.display = tripMode === 'drive' ? '' : 'none';
+        }
+
+        function setTripInside(inside) {
+            tripInside = !!inside;
+            tripPass = false;
+            document.getElementById('tripInsideBtn').classList.toggle('active', tripInside);
+            document.getElementById('tripParkBtn').classList.toggle('active', !tripInside);
+            document.getElementById('tripPassBtn').classList.remove('active');
+        }
+
+        function toggleTripPass() {
+            tripPass = !tripPass;
+            document.getElementById('tripPassBtn').classList.toggle('active', tripPass);
+            if (tripPass) document.getElementById('tripDwell').value = '0';
+        }
+
+        function toggleTripPin() {
+            tripPick = !tripPick;
+            const btn = document.getElementById('tripPinBtn');
+            btn.classList.toggle('btn-primary', tripPick);
+            if (map) map.getContainer().style.cursor = tripPick ? 'crosshair' : '';
+            if (tripPick) {
+                drivePickTarget = null;
+                const startBtn = document.getElementById('drivePickStartBtn');
+                const endBtn = document.getElementById('drivePickEndBtn');
+                if (startBtn) startBtn.classList.remove('btn-primary');
+                if (endBtn) endBtn.classList.remove('btn-primary');
+                showToast('Click the map to add a pin');
+            }
+        }
+
+        function tripRunning() {
+            return tripState === 'playing' || tripState === 'paused';
+        }
+
+        function renderTripEditor() {
+            const list = document.getElementById('tripStopList');
+            if (!list) return;
+            list.innerHTML = '';
+            tripStops.forEach((stop, index) => {
+                const row = document.createElement('div');
+                row.className = 'trip-stop';
+                row.draggable = true;
+                row.dataset.index = String(index);
+                const mode = stop.mode === 'walk' ? 'walk' : 'drive';
+                const dwell = Number(stop.dwell_minutes) || 0;
+                const kind = stop.waypoint ? 'pass-through' : (mode === 'walk' ? 'on foot' : (stop.go_inside === false ? 'park' : 'inside'));
+                row.innerHTML = `
+                    <div class="trip-num">${index + 1}</div>
+                    <div class="trip-stop-main">
+                        <strong></strong>
+                        <div class="trip-meta"></div>
+                    </div>
+                    <div class="trip-actions">
+                        <button type="button" title="Move up" aria-label="Move stop up">↑</button>
+                        <button type="button" title="Move down" aria-label="Move stop down">↓</button>
+                        <button type="button" title="Remove" aria-label="Remove stop">✕</button>
+                    </div>`;
+                row.querySelector('strong').textContent = stop.label || 'Pin';
+                row.querySelector('.trip-meta').textContent = `${mode} · ${kind} · ${dwell} min`;
+                const buttons = row.querySelectorAll('button');
+                buttons[0].onclick = () => moveTripStop(index, -1);
+                buttons[1].onclick = () => moveTripStop(index, 1);
+                buttons[2].onclick = () => removeTripStop(index);
+                row.addEventListener('dragstart', () => { tripDragIndex = index; });
+                row.addEventListener('dragover', (ev) => ev.preventDefault());
+                row.addEventListener('drop', () => {
+                    if (tripDragIndex === null || tripDragIndex === index) return;
+                    const [item] = tripStops.splice(tripDragIndex, 1);
+                    tripStops.splice(index, 0, item);
+                    tripDragIndex = null;
+                    renderTripEditor();
+                    if (tripRunning()) syncTripStops();
+                });
+                list.appendChild(row);
+            });
+        }
+
+        function moveTripStop(index, delta) {
+            const next = index + delta;
+            if (next < 0 || next >= tripStops.length) return;
+            const [item] = tripStops.splice(index, 1);
+            tripStops.splice(next, 0, item);
+            renderTripEditor();
+            if (tripRunning()) syncTripStops();
+        }
+
+        function removeTripStop(index) {
+            tripStops.splice(index, 1);
+            renderTripEditor();
+            if (tripRunning()) syncTripStops();
+        }
+
+        function pushTripStop(stop) {
+            tripStops.push(stop);
+            renderTripEditor();
+            if (tripRunning()) syncTripStops();
+        }
+
+        function addTripPin(lat, lng) {
+            const dwell = tripPass ? 0 : Math.max(0, Number(document.getElementById('tripDwell').value) || 0);
+            pushTripStop({
+                lat: Number(lat),
+                lng: Number(lng),
+                label: `Pin ${tripStops.length + 1}`,
+                mode: tripMode,
+                dwell_minutes: dwell,
+                go_inside: tripMode === 'drive' && tripInside && !tripPass,
+                waypoint: tripPass || dwell === 0 && tripMode === 'walk',
+            });
+            tripPick = false;
+            const btn = document.getElementById('tripPinBtn');
+            if (btn) btn.classList.remove('btn-primary');
+            if (map) map.getContainer().style.cursor = '';
+            showToast('Pin added to the trip');
+        }
+
+        async function addTripFromSearch() {
+            const input = document.getElementById('tripSearch');
+            const box = document.getElementById('tripSearchResults');
+            const q = (input.value || '').trim();
+            if (!q) {
+                showToast('Enter a place or drop a pin');
+                return;
+            }
+            const coord = q.match(/^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/);
+            if (coord) {
+                const dwell = tripPass ? 0 : Math.max(0, Number(document.getElementById('tripDwell').value) || 0);
+                pushTripStop({
+                    lat: parseFloat(coord[1]),
+                    lng: parseFloat(coord[2]),
+                    label: q,
+                    mode: tripMode,
+                    dwell_minutes: dwell,
+                    go_inside: tripMode === 'drive' && tripInside && !tripPass,
+                    waypoint: !!tripPass,
+                });
+                input.value = '';
+                box.style.display = 'none';
+                return;
+            }
+            try {
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`);
+                const items = await response.json();
+                if (!items.length) {
+                    showToast('No locations found');
+                    return;
+                }
+                const choose = (item) => {
+                    const dwell = tripPass ? 0 : Math.max(0, Number(document.getElementById('tripDwell').value) || 0);
+                    pushTripStop({
+                        lat: parseFloat(item.lat),
+                        lng: parseFloat(item.lon),
+                        label: item.display_name,
+                        mode: tripMode,
+                        dwell_minutes: dwell,
+                        go_inside: tripMode === 'drive' && tripInside && !tripPass,
+                        waypoint: !!tripPass,
+                    });
+                    input.value = '';
+                    box.style.display = 'none';
+                };
+                if (items.length === 1) {
+                    choose(items[0]);
+                    return;
+                }
+                box.innerHTML = '';
+                items.forEach((item) => {
+                    const div = document.createElement('div');
+                    div.className = 'search-item';
+                    div.textContent = item.display_name;
+                    div.onclick = () => choose(item);
+                    box.appendChild(div);
+                });
+                box.style.display = 'block';
+            } catch (e) {
+                showToast('Address search unavailable');
+            }
+        }
+
+        function tripPayload(start) {
+            const payload = {
+                stops: tripStops.map((stop) => ({
+                    id: stop.id,
+                    lat: stop.lat,
+                    lng: stop.lng,
+                    label: stop.label,
+                    mode: stop.mode || 'drive',
+                    dwell_minutes: Number(stop.dwell_minutes) || 0,
+                    go_inside: stop.go_inside !== false,
+                    waypoint: !!stop.waypoint,
+                })),
+                start: !!start,
+                include_stops: document.getElementById('tripSigns').checked,
+                speed_offset_pct: typeof driveOffset === 'number' ? driveOffset : 0,
+                walk_speed_mps: Number(document.getElementById('tripWalkSpeed').value) || 1.3,
+            };
+            if (typeof currentSimulated !== 'undefined' && currentSimulated && currentSimulated.lat != null) {
+                payload.from = { lat: currentSimulated.lat, lng: currentSimulated.lng };
+            }
+            return payload;
+        }
+
+        async function planTrip(start) {
+            if (!tripStops.length) {
+                showToast('Add at least one stop');
+                return;
+            }
+            const btn = document.getElementById(start ? 'tripStartBtn' : 'tripPlanBtn');
+            if (btn) btn.disabled = true;
+            document.getElementById('tripStatus').textContent = 'Routing…';
+            try {
+                const response = await fetch('/api/trip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(tripPayload(start)),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    showToast(data.error || 'Could not plan the trip');
+                    document.getElementById('tripStatus').textContent = 'Idle';
+                    return;
+                }
+                applyTrip(data, true);
+                const km = (Number(data.total_distance_m) / 1000).toFixed(1);
+                showToast(start ? `Trip started · ${km} km` : `Trip planned · ${km} km`);
+            } catch (e) {
+                document.getElementById('tripStatus').textContent = 'Idle';
+                showToast('Could not plan the trip');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        async function syncTripStops() {
+            if (!tripStops.length) return;
+            try {
+                const response = await fetch('/api/trip/stops', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stops: tripPayload(false).stops }),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                    showToast(data.error || 'Could not update the trip');
+                    return;
+                }
+                applyTrip(data, false);
+            } catch (e) {
+                showToast('Could not update the trip');
+            }
+        }
+
+        async function tripPauseResume() {
+            const path = tripState === 'playing' ? '/api/trip/pause' : '/api/trip/resume';
+            const response = await fetch(path, { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                showToast(data.error || 'Trip control failed');
+                return;
+            }
+            applyTrip(data, false);
+        }
+
+        async function tripSkip() {
+            const response = await fetch('/api/trip/skip', { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                showToast(data.error || 'Nothing to skip');
+                return;
+            }
+            applyTrip(data, false);
+        }
+
+        async function tripCancel() {
+            const response = await fetch('/api/trip/stop', { method: 'POST' });
+            const data = await response.json();
+            if (response.ok && data.ok) applyTrip(data, false);
+        }
+
+        async function saveNamedTrip() {
+            const name = (document.getElementById('tripSaveName').value || '').trim();
+            if (!name) {
+                showToast('Name the trip first');
+                return;
+            }
+            if (!tripStops.length) {
+                showToast('Add stops before saving');
+                return;
+            }
+            if (!tripRunning() && tripState !== 'idle' && tripState !== 'finished') {
+                await planTrip(false);
+            }
+            if (tripState === 'idle' || tripState === 'finished') {
+                const planned = await fetch('/api/trip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(tripPayload(false)),
+                });
+                const body = await planned.json();
+                if (!planned.ok || !body.ok) {
+                    showToast(body.error || 'Plan the trip before saving');
+                    return;
+                }
+                applyTrip(body, true);
+            }
+            const response = await fetch('/api/trip/library', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                showToast(data.error || 'Could not save the trip');
+                return;
+            }
+            showToast(`Saved “${name}”`);
+        }
+
+        async function loadNamedTrip() {
+            const name = (document.getElementById('tripSaveName').value || '').trim();
+            if (!name) {
+                showToast('Type a saved trip name');
+                return;
+            }
+            const response = await fetch('/api/trip/library/load', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, start: false }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                showToast(data.error || 'No saved trip with that name');
+                return;
+            }
+            applyTrip(data, true);
+            showToast(`Loaded “${name}”`);
+        }
+
+        function formatTripWhen(iso) {
+            if (!iso) return '';
+            const date = new Date(iso);
+            if (Number.isNaN(date.getTime())) return '';
+            return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+
+        function drawTrip(data) {
+            if (!map) return;
+            if (!tripLayer) tripLayer = L.layerGroup().addTo(map);
+            tripLayer.clearLayers();
+            const bounds = [];
+            (data.stops || []).forEach((stop, index) => {
+                (stop.parts || []).forEach((part) => {
+                    const latlngs = (part.geometry || []).map((point) => [point[0], point[1]]);
+                    if (latlngs.length < 2) return;
+                    const walk = part.mode === 'walk';
+                    L.polyline(latlngs, {
+                        color: walk ? '#34d399' : '#38bdf8',
+                        weight: walk ? 4 : 5,
+                        opacity: 0.95,
+                        dashArray: walk ? '7 7' : null,
+                    }).addTo(tripLayer);
+                    latlngs.forEach((point) => bounds.push(point));
+                });
+                const classes = ['trip-pin-num'];
+                if (stop.status === 'current') classes.push('current');
+                if (stop.mode === 'walk') classes.push('walk');
+                const icon = L.divIcon({
+                    className: 'trip-pin',
+                    html: `<div class="${classes.join(' ')}">${index + 1}</div>`,
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14],
+                });
+                L.marker([stop.lat, stop.lng], { icon, interactive: false }).addTo(tripLayer);
+                bounds.push([stop.lat, stop.lng]);
+            });
+            const key = (data.stops || []).map((stop) => `${stop.id}:${(stop.parts || []).map((part) => part.role).join(',')}`).join('|');
+            if (key && key !== tripDrawnKey && bounds.length > 1) {
+                tripDrawnKey = key;
+                map.fitBounds(bounds, { padding: [64, 64] });
+            }
+        }
+
+        function applyTrip(data, replaceEditor) {
+            if (!data) return;
+            tripState = data.state || 'idle';
+            const status = document.getElementById('tripStatus');
+            if (status) {
+                status.textContent = tripState === 'playing' ? 'Running' : (tripState === 'paused' ? 'Paused' : (tripState === 'finished' ? 'Done' : (data.stop_count ? 'Ready' : 'Idle')));
+            }
+            const pause = document.getElementById('tripPauseBtn');
+            if (pause) pause.textContent = tripState === 'playing' ? 'Pause' : 'Resume';
+            const live = document.getElementById('tripLive');
+            if (live) {
+                const next = data.next_label ? ` · next ${data.next_label}` : '';
+                const eta = data.finish_at ? ` · ETA ${formatTripWhen(data.finish_at)}` : '';
+                live.textContent = `${data.detail || 'No trip yet'}${next}${eta}`;
+            }
+            tripLive = {
+                state: data.state,
+                phase: data.phase,
+                dwell_remaining_s: Number(data.dwell_remaining_s) || 0,
+                current_label: data.current_label,
+                at: Date.now(),
+            };
+            const schedule = document.getElementById('tripSchedule');
+            if (schedule) {
+                const lines = (data.stops || []).map((stop, index) => {
+                    const km = (Number(stop.distance_m) / 1000).toFixed(1);
+                    const travel = formatDriveClock(stop.travel_s);
+                    const arrive = formatTripWhen(stop.arrive_at);
+                    const depart = formatTripWhen(stop.depart_at);
+                    const dwell = stop.waypoint ? 'pass' : `${stop.dwell_minutes} min`;
+                    return `${index + 1}. ${stop.label || 'Stop'} · ${stop.mode} · ${km} km · ${travel} · stay ${dwell} · ${arrive}–${depart}`;
+                });
+                const totalKm = (Number(data.total_distance_m) / 1000).toFixed(1);
+                if (lines.length) lines.push(`Total ${totalKm} km · ${formatDriveClock(data.total_duration_s)}`);
+                schedule.textContent = lines.join('\n');
+            }
+            drawTrip(data);
+            if (replaceEditor && Array.isArray(data.stops)) {
+                tripStops = data.stops.map((stop) => ({
+                    id: stop.id,
+                    lat: stop.lat,
+                    lng: stop.lng,
+                    label: stop.label,
+                    mode: stop.mode,
+                    dwell_minutes: stop.dwell_minutes,
+                    go_inside: stop.go_inside,
+                    waypoint: stop.waypoint,
+                }));
+                renderTripEditor();
+            }
+            document.querySelectorAll('#tripStopList .trip-stop').forEach((row, index) => {
+                const current = data.stops && data.stops[index] && data.stops[index].status === 'current';
+                row.classList.toggle('current', !!current);
+            });
+        }
+
+        async function hydrateTrip() {
+            try {
+                const response = await fetch('/api/trip');
+                if (!response.ok) return;
+                const data = await response.json();
+                if (data && data.ok && data.stop_count) applyTrip(data, true);
+            } catch (e) {}
+        }
+
+        setInterval(() => {
+            if (!tripLive || tripLive.state !== 'playing' || tripLive.phase !== 'dwell') return;
+            const left = Math.max(0, tripLive.dwell_remaining_s - (Date.now() - tripLive.at) / 1000);
+            const live = document.getElementById('tripLive');
+            if (!live) return;
+            live.textContent = `Dwelling at ${tripLive.current_label || 'the stop'} — ${formatDriveClock(left)} left`;
+        }, 250);
 
         const socket = io();
         function showReconnect(state) {
@@ -2087,8 +2674,16 @@
             if (d.follow_current) applyCurrentStart(currentSimulated);
         });
         socket.on('position', (d) => rememberSimulated(d));
+        socket.on('trip', (d) => {
+            if (!d) return;
+            applyTrip(d, false);
+        });
         socket.on('drive_plan', (d) => {
             if (!d || !d.geometry) return;
+            if (d.trip_leg) {
+                drawStopMarkers(d.stop_markers);
+                return;
+            }
             document.querySelectorAll('.tab-btn').forEach((btn) => {
                 if ((btn.textContent || '').indexOf('Routes') !== -1) switchTab('routes', btn);
             });

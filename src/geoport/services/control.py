@@ -116,6 +116,22 @@ def resolve_endpoints(
     return (start_lat, start_lng), (end_lat, end_lng), end_label
 
 
+def _trip_summary(app: Any) -> Optional[dict[str, Any]]:
+    trip = app.extensions.get('geoport', {}).get('trip')
+    if trip is None:
+        return None
+    try:
+        return trip.summary()
+    except Exception:
+        return None
+
+
+def _stop_active_trip(app: Any) -> None:
+    trip = app.extensions.get('geoport', {}).get('trip')
+    if trip is not None and getattr(trip, 'active', False):
+        trip.stop(user=True)
+
+
 def register_control_api(
     app: Any,
     runtime: Any,
@@ -168,6 +184,7 @@ def register_control_api(
             'accuracy_m': fix.get('accuracy_m') or 0,
             'accuracy_max_m': MAX_ACCURACY_M,
             'drive': drive_status,
+            'trip': _trip_summary(app),
             'reconnecting': link_state.get('reconnecting', False),
             'last_disconnect_at': link_state.get('last_disconnect_at'),
             'reconnect_attempts': link_state.get('reconnect_attempts', 0),
@@ -222,6 +239,7 @@ def register_control_api(
             payload = body()
             place = payload.get('to') or payload.get('place') or payload
             lat, lng, label = resolve_place(place, geocoder)
+            _stop_active_trip(app)
             fix = position.note(lat, lng, source='teleport', device=device_info(), pan=True)
             push_device(fix)
             drive.stop(user=False)
@@ -238,6 +256,7 @@ def register_control_api(
     def automation_drive() -> Any:
         try:
             payload = body()
+            _stop_active_trip(app)
             if payload.get('accuracy_m') is not None:
                 position.set_accuracy(float(payload['accuracy_m']), device=device_info())
             start, end, label = resolve_endpoints(payload, position, geocoder)
@@ -357,6 +376,7 @@ def register_control_api(
 
     @app.route('/api/v1/clear', methods=['POST'])
     def automation_clear() -> Any:
+        _stop_active_trip(app)
         drive.stop(user=True)
         position.clear()
         if session.snapshot.connected:
